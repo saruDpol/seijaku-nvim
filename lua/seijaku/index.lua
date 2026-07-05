@@ -69,8 +69,19 @@ function M.rebuild_derived_indexes()
   index.target_dirs = {}
 
   state.notes_by_id = index.notes
+  state.notes_by_file = {}
   state.note_ids_by_target = index.targets
   state.target_paths_by_dir = {}
+
+  for _, note in pairs(index.notes) do
+    if note.file then
+      local abs_note_path = paths.normalize(paths.join(state.vault_dir, note.file))
+
+      if abs_note_path then
+        state.notes_by_file[abs_note_path] = note
+      end
+    end
+  end
 
   for target_path, _ in pairs(index.targets) do
     local normalized = paths.normalize(target_path)
@@ -155,12 +166,33 @@ function M.add_note(note)
   local index = state.index
 
   index.notes[note.id] = note
+  state.notes_by_id[note.id] = note
+
+  if note.file then
+    local abs_note_path = paths.normalize(paths.join(state.vault_dir, note.file))
+
+    if abs_note_path then
+      state.notes_by_file[abs_note_path] = note
+    end
+  end
+
   M.mark_dirty()
 end
 
 function M.get_note(note_id)
   local state = state_mod.get()
   return state.notes_by_id[note_id]
+end
+
+function M.get_note_for_file(file_path)
+  local state = state_mod.get()
+  local normalized = paths.normalize(file_path)
+
+  if not normalized then
+    return nil
+  end
+
+  return state.notes_by_file[normalized]
 end
 
 function M.list_notes()

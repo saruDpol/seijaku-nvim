@@ -17,7 +17,9 @@ function M.normalize(path)
     path = real
   end
 
-  path = path:gsub("/$", "")
+  if path ~= "/" then
+    path = path:gsub("/$", "")
+  end
 
   if path == "" then
     return nil

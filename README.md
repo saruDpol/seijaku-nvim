@@ -23,11 +23,42 @@ require("seijaku").setup({
 ## Commands
 
 ```vim
+:SeijakuToggle
+:SeijakuOpenSidebar
+:SeijakuCloseSidebar
+:SeijakuModeAll
+:SeijakuModeDirectory
+:SeijakuToggleMode
 :SeijakuNew
 :SeijakuNewForCurrent
+:SeijakuNewForPath
+:SeijakuAttachPath
+:SeijakuDetachPath
+:SeijakuOpen
 :SeijakuList
 :SeijakuRebuildIndex
 ```
+
+## Sidebar
+
+`:SeijakuToggle` opens the current all-notes sidebar.
+
+Local sidebar mappings:
+
+```txt
+Enter  Open selected note
+n      Create global note
+r      Rename selected note
+D      Delete selected note
+m      Toggle all/directory mode
+R      Refresh
+q      Close
+```
+
+The sidebar currently supports:
+
+- `all`: all notes, sorted by last update.
+- `directory`: notes associated with the current directory and annotated paths inside it.
 
 ## Vault structure
 

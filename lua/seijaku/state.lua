@@ -12,8 +12,13 @@ local state = {
   index = nil,
 
   notes_by_id = {},
+  notes_by_file = {},
   note_ids_by_target = {},
   target_paths_by_dir = {},
+
+  context = {
+    last = nil,
+  },
 
   timers = {
     save = nil,
@@ -37,6 +42,7 @@ function M.setup(config)
   state.vault_dir = config.vault_dir
   state.index_path = config.vault_dir .. "/index.json"
   state.sidebar.mode = config.sidebar.default_mode or "all"
+  state.context.last = nil
 end
 
 function M.get()

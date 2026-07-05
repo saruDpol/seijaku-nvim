@@ -7,6 +7,7 @@ local commands = require("seijaku.commands")
 local autocmds = require("seijaku.autocmds")
 local notes = require("seijaku.notes")
 local context = require("seijaku.context")
+local sidebar = require("seijaku.sidebar")
 
 function M.setup(opts)
   config.setup(opts or {})
@@ -34,8 +35,63 @@ function M.new_note_for_current()
   return notes.create_for_target(ctx.target_path, ctx.target_type)
 end
 
+function M.new_note_for_path(path)
+  return notes.create_for_path(path)
+end
+
+function M.toggle_sidebar()
+  return sidebar.toggle()
+end
+
+function M.open_sidebar()
+  return sidebar.open()
+end
+
+function M.close_sidebar()
+  return sidebar.close()
+end
+
+function M.mode_all()
+  return sidebar.set_mode("all")
+end
+
+function M.mode_directory()
+  return sidebar.set_mode("directory")
+end
+
+function M.toggle_mode()
+  return sidebar.toggle_mode()
+end
+
 function M.open_note(note_id)
   return notes.open(note_id)
+end
+
+function M.attach_path(note_id, path)
+  local target_type = require("seijaku.paths").target_type(path)
+  local ok, err = index.attach(note_id, path, target_type)
+
+  if not ok then
+    vim.notify("seijaku: " .. tostring(err or "failed to attach path"), vim.log.levels.ERROR)
+    return false
+  end
+
+  vim.notify("seijaku: attached path")
+  sidebar.refresh()
+  return true
+end
+
+function M.detach_path(note_id, path)
+  local ok = index.detach(note_id, path)
+
+  if not ok then
+    vim.notify("seijaku: failed to detach path", vim.log.levels.ERROR)
+    return false
+  end
+
+  vim.notify("seijaku: detached path")
+  sidebar.refresh()
+  return true
 end
 
 function M.rebuild_index()

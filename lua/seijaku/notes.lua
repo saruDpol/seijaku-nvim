@@ -5,6 +5,14 @@ local index = require("seijaku.index")
 local paths = require("seijaku.paths")
 local util = require("seijaku.util")
 
+local function refresh_sidebar()
+  local ok, sidebar = pcall(require, "seijaku.sidebar")
+
+  if ok then
+    sidebar.refresh()
+  end
+end
+
 function M.generate_id()
   local parts = util.date_parts()
   local time = os.date("%H%M%S")
@@ -78,7 +86,15 @@ function M.create(opts)
       index.attach(note_id, opts.target_path, opts.target_type)
     end
 
-    M.open(note_id)
+    if opts.open ~= false then
+      M.open(note_id)
+    end
+
+    if opts.on_created then
+      opts.on_created(note)
+    end
+
+    refresh_sidebar()
   end)
 end
 
@@ -96,6 +112,17 @@ function M.create_for_target(target_path, target_type)
     target_path = target_path,
     target_type = target_type,
   })
+end
+
+function M.create_for_path(target_path)
+  local normalized = paths.normalize(target_path)
+
+  if not normalized then
+    util.notify("invalid path: " .. tostring(target_path), vim.log.levels.ERROR)
+    return
+  end
+
+  return M.create_for_target(normalized, paths.target_type(normalized))
 end
 
 function M.open(note_id)
@@ -124,6 +151,7 @@ function M.rename(note_id, new_title)
   note.updated_at = util.now()
 
   index.mark_dirty()
+  refresh_sidebar()
 
   return true
 end
@@ -143,6 +171,7 @@ function M.delete(note_id)
   end
 
   index.delete_note(note_id)
+  refresh_sidebar()
 
   return true
 end

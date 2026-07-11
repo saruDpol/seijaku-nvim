@@ -1,7 +1,7 @@
 local M = {}
 
 local defaults = {
-  vault_dir = vim.fn.stdpath("data") .. "/seijaku",
+  vault_dir = "~/Notes/seijaku",
 
   sidebar = {
     width = 40,
@@ -12,7 +12,12 @@ local defaults = {
   },
 
   editor = {
-    open_cmd = "vsplit",
+    open_cmd = "belowright split",
+  },
+
+  keymaps = {
+    enable_default = true,
+    toggle = "<A-o>",
   },
 
   index = {

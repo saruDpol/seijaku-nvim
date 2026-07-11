@@ -51,10 +51,46 @@ local function remember(ctx)
   return ctx
 end
 
+local function oil_context()
+  local state = state_mod.get()
+
+  if state.config
+      and state.config.integrations
+      and state.config.integrations.oil == false then
+    return nil
+  end
+
+  local ok, oil = pcall(require, "oil")
+  if not ok or type(oil.get_current_dir) ~= "function" then
+    return nil
+  end
+
+  local dir = oil.get_current_dir()
+
+  if not dir or dir == "" then
+    return nil
+  end
+
+  return remember(context_for_target(dir, "directory", "oil"))
+end
+
 function M.get_current()
+  local state = state_mod.get()
+  local current_buf = vim.api.nvim_get_current_buf()
   local buftype = vim.bo.buftype
   local filetype = vim.bo.filetype
   local bufname = vim.api.nvim_buf_get_name(0)
+
+  if state.sidebar
+      and state.sidebar.open
+      and state.sidebar.note_bufs
+      and state.sidebar.note_bufs[current_buf] then
+    return fallback_context()
+  end
+
+  if filetype == "oil" then
+    return oil_context() or fallback_context()
+  end
 
   if buftype == "nofile" or filetype == "seijaku" then
     return fallback_context()

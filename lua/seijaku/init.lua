@@ -18,6 +18,16 @@ function M.setup(opts)
 
   commands.setup()
   autocmds.setup()
+
+  local keymaps = config.get().keymaps or {}
+  if keymaps.enable_default ~= false and keymaps.toggle then
+    vim.keymap.set("n", keymaps.toggle, function()
+      require("seijaku").toggle_sidebar()
+    end, {
+      desc = "Toggle Seijaku sidebar",
+      silent = true,
+    })
+  end
 end
 
 function M.new_note()

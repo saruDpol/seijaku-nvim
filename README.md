@@ -14,6 +14,8 @@ A note can be global or associated with one or more filesystem paths.
 
 ## Setup
 
+By default, the vault is created at `~/Notes/seijaku`.
+
 ```lua
 require("seijaku").setup({
   vault_dir = "~/Notes/seijaku",
@@ -39,26 +41,33 @@ require("seijaku").setup({
 :SeijakuRebuildIndex
 ```
 
+Default keymap:
+
+```txt
+Alt-o       Toggle Seijaku sidebar
+```
+
 ## Sidebar
 
-`:SeijakuToggle` opens the current all-notes sidebar.
+`:SeijakuToggle` opens the current notes sidebar in a vertical split. Notes opened from the sidebar are treated as part of the sidebar session and close with it.
 
 Local sidebar mappings:
 
 ```txt
-Enter  Open selected note
+Enter  Open selected note in a horizontal split below the sidebar
+a      Create note for the current filesystem context
+x      Detach selected note from the current/contextual target
 n      Create global note
 r      Rename selected note
-D      Delete selected note
+dd     Delete selected note
 m      Toggle all/directory mode
 R      Refresh
-q      Close
 ```
 
 The sidebar currently supports:
 
 - `all`: all notes, sorted by last update.
-- `directory`: notes associated with the current directory and annotated paths inside it.
+- `directory`: for file buffers, notes attached to the current file; for directory buffers, annotated elements inside that directory.
 
 ## Vault structure
 

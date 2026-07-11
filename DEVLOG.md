@@ -1,8 +1,8 @@
-# Devlog - 2026-07-05
+# Devlog - 2026-07-11
 
 ## Estat actual
 
-`seijaku.nvim` ja te una primera base funcional per gestionar notes Markdown amb associacions a paths del filesystem.
+`seijaku.nvim` ja te una primera versio funcional per gestionar notes Markdown amb associacions a paths del filesystem.
 
 El plugin esta organitzat com a plugin Lua de Neovim:
 
@@ -33,15 +33,7 @@ require("seijaku").setup(opts)
 Per defecte el vault es crea a:
 
 ```lua
-vim.fn.stdpath("data") .. "/seijaku"
-```
-
-L'usuari tambe pot configurar-lo:
-
-```lua
-require("seijaku").setup({
-  vault_dir = "~/Notes/seijaku",
-})
+"~/Notes/seijaku"
 ```
 
 ## Implementat
@@ -94,42 +86,114 @@ notes/YYYY/MM/DD/<note_id>.md
 :SeijakuRebuildIndex
 ```
 
-### Sidebar
+### Keymap global
 
-Ja existeix una sidebar basica a `lua/seijaku/sidebar.lua`.
-
-Modes implementats:
-
-- `all`: mostra totes les notes ordenades per `updated_at`.
-- `directory`: mostra notes associades al directori actual i als paths anotats dins aquest directori.
-
-Mappings locals de la sidebar:
+Per defecte:
 
 ```txt
-Enter  obrir nota
-n      crear nota global
-r      renombrar nota
-D      eliminar nota
-m      alternar all/directory
-R      refrescar
-q      tancar
+Alt-o  toggle sidebar
 ```
 
-La sidebar renderitza des de la metadata en memoria, no llegint tots els Markdown.
+Es pot desactivar o canviar amb:
+
+```lua
+require("seijaku").setup({
+  keymaps = {
+    enable_default = false,
+    toggle = "<A-o>",
+  },
+})
+```
+
+### Sidebar
+
+La sidebar torna a ser un split vertical normal, no un popup flotant. Aixo ha simplificat focus, modes i navegacio.
+
+Mappings locals:
+
+```txt
+Enter  obrir nota en split horitzontal sota la sidebar
+a      crear nota associada al context actual
+x      detach de la nota seleccionada respecte del target/context actual
+n      crear nota global
+r      renombrar nota
+dd     eliminar nota
+m      alternar all/directory
+R      refrescar
+```
+
+No hi ha mapping local `q`; la sidebar es tanca amb `:SeijakuCloseSidebar` o amb el toggle global.
+
+La sidebar renderitza:
+
+- Capcalera minimalista `静寂 / seijaku`.
+- Guia compacta centrada.
+- Path de context relatiu al directori on s'ha inicialitzat Neovim/Seijaku.
+- Elements anotats del directori com a noms curts:
+  - `• config.lua` per fitxers.
+  - `▾ /seijaku` per directoris.
+
+### Modes de sidebar
+
+`all`:
+
+- Mostra totes les notes ordenades per `updated_at`.
+
+`directory`:
+
+- Si el context actual es un fitxer normal, mostra nomes les notes associades exactament a aquell fitxer.
+- Si el context actual es un directori o un buffer Oil, mostra els elements anotats dins aquell directori i, sota cada element, les seves notes.
+
+Aixo evita que una nota associada a `config.lua` aparegui com si estigues associada a tots els fitxers del mateix directori.
+
+### Notes obertes des de la sidebar
+
+Les notes obertes amb `Enter` des de la sidebar es consideren part de la sessio de sidebar:
+
+- S'obren per defecte amb `belowright split`.
+- Es guarden a `sidebar.note_wins` i `sidebar.note_bufs`.
+- Es tanquen automaticament quan es tanca la sidebar.
+- No actualitzen el context de la sidebar mentre el focus hi es dins.
+
+Aixo evita que obrir una nota associada a `config.lua` faci saltar el context de la sidebar cap a `config.lua` quan l'usuari venia d'un altre buffer.
 
 ### Context
 
-El context actual suporta buffers normals.
+El context actual suporta:
 
-S'ha corregit un bug important:
+- Buffers normals de fitxer.
+- Buffers de notes del vault.
+- Sidebar `seijaku`.
+- Buffers `oil.nvim`.
 
-- Si el focus esta a la sidebar, el mode `directory` conserva l'ultim context real.
-- Si el focus esta dins el Markdown d'una nota, el plugin resol la nota cap al seu target associat i mostra el directori del fitxer/directori anotat, no el directori intern del vault.
+Regles importants:
 
-Per fer aixo, l'estat ara manté:
+- Si el focus esta a la sidebar, es conserva l'ultim context extern real.
+- Si el focus esta en una nota oberta fora de la sessio de sidebar, el plugin resol la nota cap al seu primer target associat.
+- Si el focus esta en una nota oberta des de la sidebar, el plugin conserva el context extern anterior.
+- Si el focus esta a Oil, el directori actual es llegeix amb `require("oil").get_current_dir()`.
+
+L'estat manté:
 
 - `context.last`
 - `notes_by_file`
+- `sidebar.note_wins`
+- `sidebar.note_bufs`
+- `root_dir`, capturat en `setup()`
+
+### Index derivat
+
+`index.rebuild_derived_indexes()` construeix caches en memoria:
+
+- `notes_by_id`
+- `notes_by_file`
+- `note_ids_by_target`
+- `target_paths_by_dir`
+
+Els directoris associats s'indexen en dos llocs:
+
+- En el propi directori, per veure les notes quan s'esta dins aquell directori.
+- En el directori pare, per veure la carpeta anotada com a element `▾ /nom`.
 
 ## Validacions fetes
 
@@ -137,11 +201,18 @@ S'han fet proves amb Neovim headless per comprovar:
 
 - `require("seijaku")` carrega correctament.
 - `setup()` crea el vault.
-- `:SeijakuNewForPath` crea notes associades a directoris.
-- `:SeijakuToggle` obre la sidebar.
-- `:SeijakuModeDirectory` mostra notes del directori correcte.
-- El focus a la sidebar no trenca el context.
-- Obrir el Markdown d'una nota no canvia el mode directory cap al directori intern del vault.
+- `:SeijakuToggle` obre la sidebar split.
+- `Alt-o` queda registrat com a toggle global.
+- La sidebar mostra paths relatius al directori inicial.
+- Els targets es renderitzen com a noms curts.
+- `Enter` obre notes sota la sidebar.
+- Tancar la sidebar tanca les notes obertes des d'ella.
+- `a` crea nota associada al context actual.
+- `x` treu l'associacio del target correcte.
+- `dd` elimina nota.
+- Oil dona el directori correcte via `oil.get_current_dir()`.
+- Una nota associada a `config.lua` no apareix quan el context es `other.lua`.
+- Els buffers de notes oberts des de la sidebar no canvien el context de la sidebar.
 
 ## Com provar manualment
 
@@ -156,20 +227,13 @@ Dins Neovim:
 
 ```vim
 :set rtp+=/home/sarudpol/main/seijaku
-:lua require("seijaku").setup({ vault_dir = "/tmp/seijaku-test" })
+:lua require("seijaku").setup({ vault_dir = "~/Notes/seijaku" })
 ```
 
-Crear una nota global:
+Crear una nota associada al fitxer actual:
 
 ```vim
-:SeijakuNew
-```
-
-Crear una nota associada a un fitxer:
-
-```vim
-:edit /tmp/project/src/auth.lua
-:write
+:edit lua/seijaku/config.lua
 :SeijakuNewForCurrent
 ```
 
@@ -179,66 +243,75 @@ Obrir la sidebar:
 :SeijakuToggle
 ```
 
-Canviar a mode directory:
+O amb el keymap:
 
-```vim
-:SeijakuModeDirectory
+```txt
+Alt-o
 ```
 
-Crear una nota associada directament a un directori:
+Canviar entre modes:
 
-```vim
-:SeijakuNewForPath /tmp/project/src
+```txt
+m
+```
+
+Crear una nota contextual des de la sidebar:
+
+```txt
+a
+```
+
+Desassociar la nota seleccionada del target actual:
+
+```txt
+x
+```
+
+Eliminar la nota seleccionada:
+
+```txt
+dd
 ```
 
 ## Per on continuar
 
-### Seguent fase recomanada: accions contextuals des de sidebar
+### Seguent fase recomanada
 
-Implementar:
+Polir el comportament amb navegadors de fitxers:
 
-```txt
-a  crear nota associada al target/context actual
-x  detach selected note from current target
-```
+1. Millorar adapter `oil.nvim`.
+   - Detectar l'item sota cursor.
+   - Fer que `a` pugui crear nota per l'item seleccionat a Oil, no nomes pel directori actual.
+   - Fer que `x` sigui clar quan el context es un item d'Oil.
 
-Objectiu:
-
-- Si l'usuari esta editant un fitxer, `a` crea una nota associada a aquell fitxer.
-- Si l'usuari esta en mode directory, `x` treu nomes l'associacio amb el target/context actual.
-- La nota no s'elimina si encara existeix com a nota global o associada a altres paths.
-
-### Despres
-
-1. Millorar render del mode `directory`.
-   - Mostrar millor el target actual.
-   - Distingir visualment directori, fitxer i notes.
-   - Evitar linies buides sobreres.
-
-2. Implementar adapter `oil.nvim`.
-   - Detectar buffer oil.
-   - Obtenir directori actual.
-   - Obtenir item sota cursor.
-   - Crear notes associades a fitxers/directoris des d'oil.
-
-3. Implementar adapter `netrw`.
+2. Implementar adapter `netrw`.
    - Suport best-effort.
    - Fallback al directori actual si no es pot detectar l'item.
 
-4. Implementar Telescope.
-   - `:SeijakuFind`.
-   - Cerca per titol.
-   - Fallback amb `vim.ui.select`.
+3. Netejar visualment detalls de sidebar.
+   - Decidir si el contador `[n]` de targets nomes surt quan `n > 1`.
+   - Afegir highlights mes subtils per notes vs targets.
+   - Revisar textos buits/no-notes.
 
-5. Implementar backups.
+4. Backups.
    - `:SeijakuBackup`.
    - Backup automatic a `backups/canonical/seijaku-latest.tar.gz`.
    - Snapshots manuals a `backups/snapshots/`.
 
-6. Afegir tests.
+5. Tests reals.
    - `paths_spec.lua`
    - `index_spec.lua`
    - `notes_spec.lua`
+   - `context_spec.lua`
+   - `sidebar_spec.lua`
+
+### No prioritari ara mateix
+
+- Popup flotant tipus Telescope.
+- Preview flotant.
+- Fuzzy finder.
+
+El split vertical actual es molt mes facil de mantenir i debugar.
 
 ## Notes de disseny a preservar
 

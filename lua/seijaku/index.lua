@@ -83,18 +83,7 @@ function M.rebuild_derived_indexes()
     end
   end
 
-  for target_path, _ in pairs(index.targets) do
-    local normalized = paths.normalize(target_path)
-    local dir = nil
-
-    local target_type = paths.target_type(normalized)
-
-    if target_type == "directory" then
-      dir = normalized
-    else
-      dir = paths.parent_dir(normalized)
-    end
-
+  local function add_target_to_dir(dir, normalized)
     if dir then
       state.target_paths_by_dir[dir] = state.target_paths_by_dir[dir] or {}
 
@@ -109,6 +98,18 @@ function M.rebuild_derived_indexes()
       if not exists then
         table.insert(state.target_paths_by_dir[dir], normalized)
       end
+    end
+  end
+
+  for target_path, _ in pairs(index.targets) do
+    local normalized = paths.normalize(target_path)
+    local target_type = paths.target_type(normalized)
+
+    if target_type == "directory" then
+      add_target_to_dir(normalized, normalized)
+      add_target_to_dir(paths.parent_dir(normalized), normalized)
+    else
+      add_target_to_dir(paths.parent_dir(normalized), normalized)
     end
   end
 

@@ -5,6 +5,7 @@ local state = {
 
   vault_dir = nil,
   index_path = nil,
+  root_dir = nil,
 
   dirty = false,
   dirty_since_last_backup = false,
@@ -34,6 +35,8 @@ local state = {
     current_target = nil,
     lines = {},
     line_items = {},
+    note_wins = {},
+    note_bufs = {},
   },
 }
 
@@ -41,7 +44,14 @@ function M.setup(config)
   state.config = config
   state.vault_dir = config.vault_dir
   state.index_path = config.vault_dir .. "/index.json"
+  state.root_dir = vim.fn.fnamemodify(vim.loop.cwd(), ":p"):gsub("/$", "")
   state.sidebar.mode = config.sidebar.default_mode or "all"
+  state.sidebar.current_dir = nil
+  state.sidebar.current_target = nil
+  state.sidebar.lines = {}
+  state.sidebar.line_items = {}
+  state.sidebar.note_wins = {}
+  state.sidebar.note_bufs = {}
   state.context.last = nil
 end
 

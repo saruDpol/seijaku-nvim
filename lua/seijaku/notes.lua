@@ -87,7 +87,15 @@ function M.create(opts)
     end
 
     if opts.open ~= false then
-      M.open(note_id)
+      local sidebar_ok, sidebar = pcall(require, "seijaku.sidebar")
+      local opened_in_sidebar = sidebar_ok and sidebar.open_preview(note_id, {
+        force = true,
+        focus = true,
+      })
+
+      if not opened_in_sidebar then
+        M.open(note_id)
+      end
     end
 
     if opts.on_created then

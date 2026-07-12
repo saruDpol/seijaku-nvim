@@ -1,4 +1,49 @@
-# Devlog - 2026-07-11
+# Devlog
+
+## Actualitzacio - 2026-07-13
+
+### Carrega i instal·lacio
+
+- Afegida documentacio per instal·lar des de `saruDpol/seijaku-nvim` amb
+  `lazy.nvim` o LazyVim.
+- La spec remota declara `main = "seijaku"` i executa `setup()` via `opts`.
+- La configuracio local amb `dir` continua documentada per desenvolupament.
+- Mappings globals configurables:
+  - `Alt-o`: obrir o tancar la sidebar.
+  - `<leader>a`: crear una nota pel buffer actiu, amb `nowait`.
+
+### Persistencia i metadata
+
+- `updated_at` s'actualitza a `BufWritePost` quan es desa una nota.
+- `created_at` no canvia en editar o reanomenar.
+- Reanomenar modifica la metadata, pero no reescriu la capcalera Markdown.
+- Un `index.json` invalid ja no es substitueix per un index buit en sortir.
+- Corregida una cursa i el tancament dels timers de desat.
+
+### Sidebar actual
+
+- Capcalera compacta amb marca, separador complet i modes contextuals.
+- Modes en ordre `all`, `dir`, `agenda`, alternables amb `Tab`.
+- `all` te ordenacio `date` o `updated`, alternable amb `s`:
+  - `date` agrupa per dia de creacio, del mes recent al mes antic.
+  - `updated` ordena per ultima actualitzacio.
+- A `all`, cada nota mostra a la dreta el primer target associat.
+- `dir` mostra un arbre recursiu filtrat pel directori actual, incloent les
+  carpetes intermedies necessaries.
+- Fitxers, carpetes, dates, notes i modes tenen highlights separats.
+- Integracio opcional amb `nvim-web-devicons` i icones de fallback.
+- Amplada automatica gestionada per Neovim, limitada entre 40 i 52 columnes.
+
+### Preview i splits
+
+- La preview es un split horitzontal gestionat dins de la columna de sidebar.
+- Moure la seleccio actualitza la preview mentre sigui oberta.
+- `Enter` crea una vista fixa addicional dins de la mateixa columna.
+- Si la preview es tanca amb `:q`, no reapareix pel simple moviment del cursor.
+- Crear una nota amb la sidebar oberta reutilitza o recrea la preview i hi mou
+  el focus per editar-la.
+
+## Estat inicial - 2026-07-11
 
 ## Estat actual
 
@@ -118,7 +163,8 @@ x      detach de la nota seleccionada respecte del target/context actual
 n      crear nota global
 r      renombrar nota
 dd     eliminar nota
-m      alternar all/directory
+Tab    alternar all/directory/agenda
+s      alternar date/updated en mode all
 R      refrescar
 ```
 
@@ -252,7 +298,7 @@ Alt-o
 Canviar entre modes:
 
 ```txt
-m
+Tab
 ```
 
 Crear una nota contextual des de la sidebar:

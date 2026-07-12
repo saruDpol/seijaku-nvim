@@ -50,14 +50,15 @@ function M.load()
     local ok, decoded = pcall(decode_json, raw)
 
     if not ok or type(decoded) ~= "table" then
-      vim.notify("seijaku: failed to parse index.json, using empty index", vim.log.levels.ERROR)
-      state.index = empty_index()
+      state.index = nil
+      return false, "failed to parse " .. state.index_path .. "; the file was left unchanged"
     else
       state.index = decoded
     end
   end
 
   M.rebuild_derived_indexes()
+  return true
 end
 
 function M.rebuild_derived_indexes()
@@ -147,13 +148,27 @@ function M.schedule_save()
 
   if save_timer then
     save_timer:stop()
-    save_timer:close()
+    if not save_timer:is_closing() then
+      save_timer:close()
+    end
     save_timer = nil
   end
 
-  save_timer = vim.loop.new_timer()
-  save_timer:start(delay, 0, vim.schedule_wrap(function()
+  local timer = vim.loop.new_timer()
+  save_timer = timer
+  timer:start(delay, 0, vim.schedule_wrap(function()
+    if save_timer ~= timer then
+      if not timer:is_closing() then
+        timer:close()
+      end
+      return
+    end
+
     write_index_sync()
+    if not timer:is_closing() then
+      timer:close()
+    end
+    save_timer = nil
   end))
 end
 
@@ -194,6 +209,18 @@ function M.get_note_for_file(file_path)
   end
 
   return state.notes_by_file[normalized]
+end
+
+function M.touch_note_for_file(file_path)
+  local note = M.get_note_for_file(file_path)
+
+  if not note then
+    return false
+  end
+
+  note.updated_at = util.now()
+  M.mark_dirty()
+  return true
 end
 
 function M.list_notes()
@@ -366,6 +393,24 @@ function M.get_notes_for_dir(dir_path)
 
   for _, target_path in ipairs(target_paths) do
     grouped[target_path] = M.get_notes_for_target(target_path)
+  end
+
+  return grouped
+end
+
+function M.get_notes_for_tree(dir_path)
+  local state = state_mod.get()
+  dir_path = paths.normalize(dir_path)
+  local grouped = {}
+
+  if not dir_path then
+    return grouped
+  end
+
+  for target_path, _ in pairs(state.note_ids_by_target or {}) do
+    if paths.inside_dir(target_path, dir_path) then
+      grouped[target_path] = M.get_notes_for_target(target_path)
+    end
   end
 
   return grouped

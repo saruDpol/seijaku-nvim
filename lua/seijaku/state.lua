@@ -31,12 +31,17 @@ local state = {
     win = nil,
     buf = nil,
     mode = "all",
+    all_sort = "date",
     current_dir = nil,
     current_target = nil,
     lines = {},
     line_items = {},
     note_wins = {},
     note_bufs = {},
+    source_win = nil,
+    preview_win = nil,
+    preview_buf = nil,
+    preview_note_id = nil,
   },
 }
 
@@ -46,12 +51,17 @@ function M.setup(config)
   state.index_path = config.vault_dir .. "/index.json"
   state.root_dir = vim.fn.fnamemodify(vim.loop.cwd(), ":p"):gsub("/$", "")
   state.sidebar.mode = config.sidebar.default_mode or "all"
+  state.sidebar.all_sort = config.sidebar.default_all_sort or "date"
   state.sidebar.current_dir = nil
   state.sidebar.current_target = nil
   state.sidebar.lines = {}
   state.sidebar.line_items = {}
   state.sidebar.note_wins = {}
   state.sidebar.note_bufs = {}
+  state.sidebar.source_win = nil
+  state.sidebar.preview_win = nil
+  state.sidebar.preview_buf = nil
+  state.sidebar.preview_note_id = nil
   state.context.last = nil
 end
 

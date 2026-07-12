@@ -4,9 +4,10 @@ local defaults = {
   vault_dir = "~/Notes/seijaku",
 
   sidebar = {
-    width = 40,
+    width = "auto",
     position = "right",
     default_mode = "all",
+    default_all_sort = "date",
     all_mode_limit = 500,
     debounce_ms = 150,
   },
@@ -18,6 +19,7 @@ local defaults = {
   keymaps = {
     enable_default = true,
     toggle = "<A-o>",
+    new_for_current = "<leader>a",
   },
 
   index = {

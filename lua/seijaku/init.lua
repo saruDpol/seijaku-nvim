@@ -14,7 +14,10 @@ function M.setup(opts)
   state.setup(config.get())
 
   index.ensure_vault()
-  index.load()
+  local ok, err = index.load()
+  if not ok then
+    error("seijaku: " .. tostring(err), 0)
+  end
 
   commands.setup()
   autocmds.setup()
@@ -26,6 +29,16 @@ function M.setup(opts)
     end, {
       desc = "Toggle Seijaku sidebar",
       silent = true,
+    })
+  end
+
+  if keymaps.enable_default ~= false and keymaps.new_for_current then
+    vim.keymap.set("n", keymaps.new_for_current, function()
+      require("seijaku").new_note_for_current()
+    end, {
+      desc = "Create Seijaku note for current buffer",
+      silent = true,
+      nowait = true,
     })
   end
 end

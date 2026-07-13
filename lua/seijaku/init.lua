@@ -48,7 +48,7 @@ function M.new_note()
 end
 
 function M.new_note_for_current()
-  local ctx = context.get_current()
+  local ctx = context.get_association_target()
 
   if not ctx or not ctx.target_path then
     vim.notify("seijaku: no current filesystem target found", vim.log.levels.WARN)
@@ -80,6 +80,10 @@ end
 
 function M.mode_directory()
   return sidebar.set_mode("directory")
+end
+
+function M.mode_calendar()
+  return sidebar.set_mode("calendar")
 end
 
 function M.toggle_mode()

@@ -1,6 +1,63 @@
 # Devlog
 
+## Actualitzacio - 2026-07-14
+
+### Calendari
+
+- El tercer mode de sidebar ara es `cal`, accessible amb `Tab` o
+  `:SeijakuModeCalendar`.
+- Calendari gregoria pur en Lua, navegable entre els anys 1 i 9999 sense
+  dependencies ni calculs dependents de timezone.
+- La columna de Seijaku es divideix en dues finestres reals: calendari mensual a
+  dalt i notes del dia seleccionat a baix.
+- El panell inferior comenca directament per les notes, sense titol ni separador
+  horitzontal.
+- La primera nota del dia obre la preview gestionada per defecte i moure el
+  cursor pel llistat actualitza la preview, respectant-ne el tancament manual.
+- Cada canvi de mode retorna cursor i scroll a la primera linia dels panells.
+- Passar per un dia buit ja no deixa `all` o `dir` sense preview: cada canvi de
+  mode la recrea amb la primera nota disponible al mode de destinacio.
+- El panell diari suporta `r` per reanomenar i `dd` per eliminar amb confirmacio,
+  a mes d'`Enter`, `a`, `n`, `x`, `Tab` i `R`.
+- Al mode `all`, `date` usa `calendar_date` amb fallback a `created_at`,
+  `updated` conserva l'ordre per ultima modificacio i el nou `created` agrupa
+  estrictament per data de creacio; `s` recorre els tres.
+- Eliminada la geometria manual de la preview: calendari, llista diaria, preview
+  i notes addicionals tornen a ser splits normals que Neovim distribueix segons
+  el layout disponible.
+- `Ctrl-w j/k` canvia de panell; `h/j/k/l`, fletxes, `[/]`, `gg/G` i `t`
+  naveguen dies, setmanes, mesos i avui.
+- Els dies amb notes queden marcats; avui i el dia seleccionat tenen highlights
+  propis.
+- Les notes sense data explicita apareixen al seu dia de creacio. Les creades
+  des del calendari guarden `calendar_date` i mostren `Date` a la capcalera.
+- `a` i `n` creen notes contextuals o globals pel dia seleccionat; `x` elimina
+  la data explicita des del panell de notes.
+- Canviar de mode o tancar Seijaku neteja el panell auxiliar i les previews sense
+  deixar splits orfes, inclos quan la sidebar es l'ultima finestra.
+
 ## Actualitzacio - 2026-07-13
+
+### Context de fitxers i layout
+
+- El mode inicial de la sidebar ara es `directory`.
+- La sidebar s'obre com un `vsplit` real i força una amplada flexible tant a la
+  finestra d'origen com a la sidebar.
+- Si la sidebar queda com a ultima finestra, el toggle la substitueix per un
+  buffer buit en lloc de fallar en intentar tancar l'ultima finestra.
+- El recompte de l'ultima finestra ignora popups i finestres flotants, evitant
+  l'error `E444` en tancar la sidebar.
+- Els buffers especials que representen un fitxer existent es poden associar
+  encara que el fitxer sigui binari o tingui una extensio com `.xlsx` o `.docx`.
+- A Oil, el target es l'entrada sota el cursor; si no n'hi ha cap, es conserva
+  el directori actual com a fallback.
+- El context d'associacio d'Oil esta separat del context de navegacio: `a`
+  treballa amb l'entrada sota el cursor, mentre el mode `dir` sempre representa
+  el directori obert i tots els seus subdirectoris.
+- L'esdeveniment `OilEnter` refresca la vista immediatament despres de renderitzar
+  un directori nou, sense esperar el debounce generic de canvi de buffer.
+- El filtre recursiu de targets usa els paths normalitzats de l'index sense fer
+  crides repetides al filesystem per cada nota.
 
 ### Carrega i instal·lacio
 
@@ -14,29 +71,36 @@
 
 ### Persistencia i metadata
 
-- `updated_at` s'actualitza a `BufWritePost` quan es desa una nota.
+- `updated_at` s'actualitza just abans d'escriure una nota.
 - `created_at` no canvia en editar o reanomenar.
 - Reanomenar modifica la metadata, pero no reescriu la capcalera Markdown.
+- Les notes noves mostren, abans del titol, una capcalera Markdown minima
+  generada amb les dates de creacio i modificacio i tots els paths associats.
+- La capcalera visible se sincronitza en desar, associar o desassociar, pero
+  `index.json` continua sent la font de veritat i no es parseja el Markdown.
 - Un `index.json` invalid ja no es substitueix per un index buit en sortir.
 - Corregida una cursa i el tancament dels timers de desat.
 
 ### Sidebar actual
 
 - Capcalera compacta amb marca, separador complet i modes contextuals.
-- Modes en ordre `all`, `dir`, `agenda`, alternables amb `Tab`.
-- `all` te ordenacio `date` o `updated`, alternable amb `s`:
-  - `date` agrupa per dia de creacio, del mes recent al mes antic.
+- Modes en ordre `all`, `dir`, `cal`, alternables amb `Tab`.
+- `all` te ordenacio `date`, `updated` o `created`, alternable amb `s`:
+  - `date` agrupa per data efectiva de calendari.
   - `updated` ordena per ultima actualitzacio.
-- A `all`, cada nota mostra a la dreta el primer target associat.
+  - `created` agrupa per dia de creacio.
+- A `all`, cada nota reserva mes espai a la dreta pel primer target associat.
 - `dir` mostra un arbre recursiu filtrat pel directori actual, incloent les
   carpetes intermedies necessaries.
 - Fitxers, carpetes, dates, notes i modes tenen highlights separats.
 - Integracio opcional amb `nvim-web-devicons` i icones de fallback.
-- Amplada automatica gestionada per Neovim, limitada entre 40 i 52 columnes.
+- Amplada automatica gestionada per Neovim, limitada entre 44 i 56 columnes.
 
 ### Preview i splits
 
 - La preview es un split horitzontal gestionat dins de la columna de sidebar.
+- Les finestres de notes activen `wrap`, `linebreak` i `breakindent` per defecte;
+  el wrapping es visual, local a la finestra i configurable des d'`editor`.
 - Moure la seleccio actualitza la preview mentre sigui oberta.
 - `Enter` crea una vista fixa addicional dins de la mateixa columna.
 - Si la preview es tanca amb `:q`, no reapareix pel simple moviment del cursor.
@@ -62,6 +126,7 @@ lua/
     ├── index.lua
     ├── notes.lua
     ├── context.lua
+    ├── calendar.lua
     ├── commands.lua
     ├── autocmds.lua
     └── sidebar.lua
@@ -120,6 +185,7 @@ notes/YYYY/MM/DD/<note_id>.md
 :SeijakuCloseSidebar
 :SeijakuModeAll
 :SeijakuModeDirectory
+:SeijakuModeCalendar
 :SeijakuToggleMode
 :SeijakuNew
 :SeijakuNewForCurrent
@@ -136,16 +202,28 @@ notes/YYYY/MM/DD/<note_id>.md
 Per defecte:
 
 ```txt
-Alt-o  toggle sidebar
+Alt-o       toggle sidebar
+<leader>a  crear nota pel context actual
 ```
 
 Es pot desactivar o canviar amb:
 
 ```lua
 require("seijaku").setup({
+  sidebar = {
+    width = "auto",
+    default_mode = "directory",
+    default_all_sort = "date",
+  },
+  editor = {
+    wrap = true,
+    linebreak = true,
+    breakindent = true,
+  },
   keymaps = {
     enable_default = false,
     toggle = "<A-o>",
+    new_for_current = "<leader>a",
   },
 })
 ```
@@ -163,8 +241,8 @@ x      detach de la nota seleccionada respecte del target/context actual
 n      crear nota global
 r      renombrar nota
 dd     eliminar nota
-Tab    alternar all/directory/agenda
-s      alternar date/updated en mode all
+Tab    alternar all/directory/calendar
+s      alternar date/updated/created en mode all
 R      refrescar
 ```
 
@@ -183,7 +261,9 @@ La sidebar renderitza:
 
 `all`:
 
-- Mostra totes les notes ordenades per `updated_at`.
+- `date` agrupa per `calendar_date`, amb fallback a `created_at`.
+- `updated` ordena per ultima modificacio.
+- `created` agrupa estrictament per data de creacio.
 
 `directory`:
 
@@ -191,6 +271,13 @@ La sidebar renderitza:
 - Si el context actual es un directori o un buffer Oil, mostra els elements anotats dins aquell directori i, sota cada element, les seves notes.
 
 Aixo evita que una nota associada a `config.lua` aparegui com si estigues associada a tots els fitxers del mateix directori.
+
+`calendar`:
+
+- Renderitza qualsevol mes entre els anys 1 i 9999.
+- Separa calendari i notes del dia en dos splits navegables amb `Ctrl-w j/k`.
+- Les notes creades des del calendari guarden `calendar_date`.
+- Les previews i notes addicionals son splits normals gestionats per Neovim.
 
 ### Notes obertes des de la sidebar
 
@@ -259,6 +346,9 @@ S'han fet proves amb Neovim headless per comprovar:
 - Oil dona el directori correcte via `oil.get_current_dir()`.
 - Una nota associada a `config.lua` no apareix quan el context es `other.lua`.
 - Els buffers de notes oberts des de la sidebar no canvien el context de la sidebar.
+- El mode calendari navega dies, setmanes i mesos i mostra les notes de la data efectiva.
+- `all`, `dir` i `cal` mantenen una preview gestionada quan hi ha notes.
+- `wrap`, `linebreak` i `breakindent` nomes s'apliquen a les finestres de notes de Seijaku.
 
 ## Com provar manualment
 
@@ -325,9 +415,7 @@ dd
 
 Polir el comportament amb navegadors de fitxers:
 
-1. Millorar adapter `oil.nvim`.
-   - Detectar l'item sota cursor.
-   - Fer que `a` pugui crear nota per l'item seleccionat a Oil, no nomes pel directori actual.
+1. Acabar de polir l'adapter `oil.nvim`.
    - Fer que `x` sigui clar quan el context es un item d'Oil.
 
 2. Implementar adapter `netrw`.

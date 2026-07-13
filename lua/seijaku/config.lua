@@ -6,7 +6,7 @@ local defaults = {
   sidebar = {
     width = "auto",
     position = "right",
-    default_mode = "all",
+    default_mode = "directory",
     default_all_sort = "date",
     all_mode_limit = 500,
     debounce_ms = 150,
@@ -14,6 +14,9 @@ local defaults = {
 
   editor = {
     open_cmd = "belowright split",
+    wrap = true,
+    linebreak = true,
+    breakindent = true,
   },
 
   keymaps = {

@@ -21,6 +21,10 @@ function M.setup()
     require("seijaku").mode_directory()
   end, {})
 
+  vim.api.nvim_create_user_command("SeijakuModeCalendar", function()
+    require("seijaku").mode_calendar()
+  end, {})
+
   vim.api.nvim_create_user_command("SeijakuToggleMode", function()
     require("seijaku").toggle_mode()
   end, {})

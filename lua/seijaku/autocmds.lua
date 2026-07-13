@@ -14,12 +14,44 @@ function M.setup()
     end,
   })
 
-  vim.api.nvim_create_autocmd("BufWritePost", {
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "OilEnter",
+    callback = function(args)
+      local state = require("seijaku.state").get()
+      local oil_buf = args.data and args.data.buf or nil
+      local source_win = state.sidebar.source_win
+      local captured = false
+
+      if oil_buf and vim.api.nvim_get_current_buf() == oil_buf then
+        require("seijaku.context").get_current()
+        captured = true
+      elseif oil_buf
+          and source_win
+          and vim.api.nvim_win_is_valid(source_win)
+          and vim.api.nvim_win_get_buf(source_win) == oil_buf then
+        vim.api.nvim_win_call(source_win, function()
+          require("seijaku.context").get_current()
+        end)
+        captured = true
+      end
+
+      if captured and state.sidebar.open then
+        require("seijaku.sidebar").refresh()
+      end
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("BufWritePre", {
     group = group,
     callback = function(args)
       local file_path = vim.api.nvim_buf_get_name(args.buf)
+      local index = require("seijaku.index")
 
-      if require("seijaku.index").touch_note_for_file(file_path) then
+      if index.touch_note_for_file(file_path) then
+        require("seijaku.notes").sync_metadata(index.get_note_for_file(file_path), args.buf, {
+          write = false,
+        })
         local state = require("seijaku.state").get()
         if state.sidebar.open then
           require("seijaku.sidebar").schedule_refresh()

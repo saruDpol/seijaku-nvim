@@ -5,6 +5,7 @@ local index = require("seijaku.index")
 local notes = require("seijaku.notes")
 local context = require("seijaku.context")
 local paths = require("seijaku.paths")
+local calendar = require("seijaku.calendar")
 
 local refresh_timer = nil
 local highlight_ns = vim.api.nvim_create_namespace("seijaku_sidebar")
@@ -21,6 +22,18 @@ local function is_valid_buf(buf)
 	return buf and vim.api.nvim_buf_is_valid(buf)
 end
 
+local function normal_windows_in_current_tab()
+	local result = {}
+
+	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+		if is_valid_win(win) and vim.api.nvim_win_get_config(win).relative == "" then
+			table.insert(result, win)
+		end
+	end
+
+	return result
+end
+
 local function selected_item()
 	local sidebar = sidebar_state()
 
@@ -30,6 +43,17 @@ local function selected_item()
 
 	local line = vim.api.nvim_win_get_cursor(sidebar.win)[1]
 	return sidebar.line_items[line]
+end
+
+local function selected_calendar_note_item()
+	local sidebar = sidebar_state()
+
+	if not is_valid_win(sidebar.calendar_notes_win) then
+		return nil
+	end
+
+	local line = vim.api.nvim_win_get_cursor(sidebar.calendar_notes_win)[1]
+	return sidebar.calendar_notes_items[line]
 end
 
 local function set_sidebar_options(buf)
@@ -174,7 +198,7 @@ local function add_header(lines, line_items, title)
 	local mode_labels = {
 		mode == "all" and sidebar_state().all_sort or "all",
 		mode == "directory" and tostring(title or ".") or "dir",
-		"agenda",
+		"cal",
 	}
 	local active_index = mode == "all" and 1 or mode == "directory" and 2 or 3
 	local available_active = math.max(
@@ -219,14 +243,17 @@ local function add_header(lines, line_items, title)
 	line_items[#lines] = { kind = "spacer" }
 end
 
-local function apply_highlights()
+local function apply_highlights(buf, lines, line_items)
 	local sidebar = sidebar_state()
+	buf = buf or sidebar.buf
+	lines = lines or sidebar.lines
+	line_items = line_items or sidebar.line_items
 
-	if not is_valid_buf(sidebar.buf) then
+	if not is_valid_buf(buf) then
 		return
 	end
 
-	vim.api.nvim_buf_clear_namespace(sidebar.buf, highlight_ns, 0, -1)
+	vim.api.nvim_buf_clear_namespace(buf, highlight_ns, 0, -1)
 	vim.api.nvim_set_hl(0, "SeijakuHeader", { bold = true })
 	vim.api.nvim_set_hl(0, "SeijakuBrand", { fg = "#769267", ctermfg = 108, bold = false })
 	vim.api.nvim_set_hl(0, "SeijakuModeActive", { fg = "#9f3434", ctermfg = 217, bold = true })
@@ -235,6 +262,9 @@ local function apply_highlights()
 	vim.api.nvim_set_hl(0, "SeijakuSection", { link = "Title" })
 	vim.api.nvim_set_hl(0, "SeijakuTarget", { link = "Comment" })
 	vim.api.nvim_set_hl(0, "SeijakuNote", { link = "Function" })
+	vim.api.nvim_set_hl(0, "SeijakuCalendarToday", { link = "DiagnosticInfo" })
+	vim.api.nvim_set_hl(0, "SeijakuCalendarSelected", { link = "Visual" })
+	vim.api.nvim_set_hl(0, "SeijakuCalendarHasNotes", { link = "Function" })
 
 	local highlight_by_kind = {
 		subheader = "SeijakuSubheader",
@@ -244,26 +274,28 @@ local function apply_highlights()
 		target = "SeijakuTarget",
 		folder = "SeijakuTarget",
 		date = "SeijakuTarget",
+		calendar_month = "SeijakuSection",
+		calendar_weekdays = "SeijakuSubheader",
 	}
 
-	for line, item in pairs(sidebar.line_items or {}) do
+	for line, item in pairs(line_items or {}) do
 		local group = item and highlight_by_kind[item.kind]
 
 		if group then
-			vim.api.nvim_buf_set_extmark(sidebar.buf, highlight_ns, line - 1, 0, {
+			vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, 0, {
 				line_hl_group = group,
 				priority = 100,
 			})
 		end
 
 		if item and (item.kind == "modes" or item.kind == "submodes") then
-			vim.api.nvim_buf_set_extmark(sidebar.buf, highlight_ns, line - 1, 0, {
-				end_col = #sidebar.lines[line],
+			vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, 0, {
+				end_col = #lines[line],
 				hl_group = "SeijakuSubheader",
 				hl_mode = "replace",
 				priority = 100,
 			})
-			vim.api.nvim_buf_set_extmark(sidebar.buf, highlight_ns, line - 1, item.active_start, {
+			vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, item.active_start, {
 				end_col = item.active_end,
 				hl_group = "SeijakuModeActive",
 				hl_mode = "replace",
@@ -272,13 +304,13 @@ local function apply_highlights()
 		end
 
 		if item and item.kind == "header" then
-			vim.api.nvim_buf_set_extmark(sidebar.buf, highlight_ns, line - 1, 0, {
-				end_col = #sidebar.lines[line],
+			vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, 0, {
+				end_col = #lines[line],
 				hl_group = "SeijakuHeader",
 				hl_mode = "replace",
 				priority = 100,
 			})
-			vim.api.nvim_buf_set_extmark(sidebar.buf, highlight_ns, line - 1, item.brand_start, {
+			vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, item.brand_start, {
 				end_col = item.brand_end,
 				hl_group = "SeijakuBrand",
 				hl_mode = "replace",
@@ -287,8 +319,8 @@ local function apply_highlights()
 		end
 
 		if item and item.kind == "note" then
-			vim.api.nvim_buf_set_extmark(sidebar.buf, highlight_ns, line - 1, 0, {
-				end_col = #sidebar.lines[line],
+			vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, 0, {
+				end_col = #lines[line],
 				hl_group = "SeijakuNote",
 				hl_mode = "replace",
 				priority = 100,
@@ -296,12 +328,36 @@ local function apply_highlights()
 		end
 
 		if item and item.kind == "note" and item.target_start then
-			vim.api.nvim_buf_set_extmark(sidebar.buf, highlight_ns, line - 1, item.target_start, {
+			vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, item.target_start, {
 				end_col = item.target_end,
 				hl_group = "SeijakuTarget",
 				hl_mode = "replace",
 				priority = 110,
 			})
+		end
+
+		if item and item.kind == "calendar_week" then
+			local today = calendar.today()
+			local today_key = calendar.format(today.year, today.month, today.day)
+
+			for _, cell in ipairs(item.cells or {}) do
+				local group_name = cell.has_notes and "SeijakuCalendarHasNotes" or nil
+				if cell.date == today_key then
+					group_name = "SeijakuCalendarToday"
+				end
+				if cell.date == sidebar.calendar_date then
+					group_name = "SeijakuCalendarSelected"
+				end
+
+				if group_name then
+					vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, cell.start_col, {
+						end_col = cell.end_col,
+						hl_group = group_name,
+						hl_mode = "replace",
+						priority = cell.date == sidebar.calendar_date and 130 or 120,
+					})
+				end
+			end
 		end
 	end
 end
@@ -327,8 +383,8 @@ local function all_note_line(note)
 	end
 
 	local right = paths.basename(first_target.path)
-	right = truncate_left(right, math.max(4, math.floor(width * 0.4)))
-	local left_width = math.max(4, width - display_width(right) - 1)
+	right = truncate_left(right, math.max(8, width - 18))
+	local left_width = math.max(12, width - display_width(right) - 1)
 	left = truncate_right(left, left_width)
 	local gap = math.max(1, width - display_width(left) - display_width(right))
 	local line = left .. string.rep(" ", gap) .. right
@@ -374,6 +430,15 @@ function M.render_all()
 
 	if sidebar_state().all_sort == "date" then
 		table.sort(all_notes, function(a, b)
+			local a_date = tostring(index.calendar_date(a) or "")
+			local b_date = tostring(index.calendar_date(b) or "")
+			if a_date == b_date then
+				return tostring(a.updated_at or "") > tostring(b.updated_at or "")
+			end
+			return a_date > b_date
+		end)
+	elseif sidebar_state().all_sort == "created" then
+		table.sort(all_notes, function(a, b)
 			return tostring(a.created_at or "") > tostring(b.created_at or "")
 		end)
 	end
@@ -389,8 +454,14 @@ function M.render_all()
 				break
 			end
 
-			if sidebar_state().all_sort == "date" then
-				local note_date = tostring(note.created_at or ""):match("^%d%d%d%d%-%d%d%-%d%d") or "Unknown date"
+			if sidebar_state().all_sort == "date" or sidebar_state().all_sort == "created" then
+				local note_date
+				if sidebar_state().all_sort == "date" then
+					note_date = index.calendar_date(note)
+				else
+					note_date = tostring(note.created_at or ""):match("^%d%d%d%d%-%d%d%-%d%d")
+				end
+				note_date = note_date or "Unknown date"
 				if note_date ~= current_date then
 					current_date = note_date
 					table.insert(lines, " " .. note_date)
@@ -560,21 +631,203 @@ function M.render_directory()
 	return lines, line_items
 end
 
-function M.render_agenda()
+local function calendar_cell(label, width)
+	label = tostring(label or "")
+	local remaining = math.max(0, width - display_width(label))
+	local left = math.floor(remaining / 2)
+	return string.rep(" ", left) .. label .. string.rep(" ", remaining - left)
+end
+
+local function close_preview_window()
+	local sidebar = sidebar_state()
+
+	if is_valid_win(sidebar.preview_win) then
+		vim.api.nvim_win_close(sidebar.preview_win, true)
+	end
+	if sidebar.preview_buf then
+		sidebar.note_bufs[sidebar.preview_buf] = nil
+	end
+
+	sidebar.preview_win = nil
+	sidebar.preview_buf = nil
+	sidebar.preview_note_id = nil
+end
+
+local function close_calendar_notes_window()
+	local sidebar = sidebar_state()
+
+	if is_valid_win(sidebar.calendar_notes_win) then
+		if vim.api.nvim_get_current_win() == sidebar.calendar_notes_win and is_valid_win(sidebar.win) then
+			vim.api.nvim_set_current_win(sidebar.win)
+		end
+		vim.api.nvim_win_close(sidebar.calendar_notes_win, true)
+	end
+
+	sidebar.calendar_notes_win = nil
+	if is_valid_win(sidebar.win) then
+		vim.wo[sidebar.win].winfixheight = false
+	end
+end
+
+local function ensure_calendar_notes_window()
+	local sidebar = sidebar_state()
+
+	if is_valid_win(sidebar.calendar_notes_win) or not is_valid_win(sidebar.win) then
+		return
+	end
+
+	if not is_valid_buf(sidebar.calendar_notes_buf) then
+		sidebar.calendar_notes_buf = vim.api.nvim_create_buf(false, true)
+		set_sidebar_options(sidebar.calendar_notes_buf)
+	end
+
+	local current_win = vim.api.nvim_get_current_win()
+	vim.api.nvim_set_current_win(sidebar.win)
+	vim.cmd("belowright split")
+	sidebar.calendar_notes_win = vim.api.nvim_get_current_win()
+	vim.api.nvim_win_set_buf(sidebar.calendar_notes_win, sidebar.calendar_notes_buf)
+	vim.wo[sidebar.calendar_notes_win].number = false
+	vim.wo[sidebar.calendar_notes_win].relativenumber = false
+	vim.wo[sidebar.calendar_notes_win].signcolumn = "no"
+	vim.wo[sidebar.calendar_notes_win].wrap = false
+	vim.wo[sidebar.calendar_notes_win].winfixheight = false
+	M.setup_calendar_notes_mappings(sidebar.calendar_notes_buf)
+
+	if is_valid_win(current_win) then
+		vim.api.nvim_set_current_win(current_win)
+	end
+end
+
+function M.render_calendar()
+	local sidebar = sidebar_state()
+	local selected = calendar.parse(sidebar.calendar_date) or calendar.today()
+	sidebar.calendar_date = calendar.format(selected.year, selected.month, selected.day)
+
 	local lines = {}
 	local line_items = {}
-	add_header(lines, line_items, "agenda")
-	table.insert(lines, "Agenda coming soon")
+	local width = sidebar_width()
+	local counts = index.get_calendar_counts(selected.year, selected.month)
+
+	add_header(lines, line_items, "cal")
+	table.insert(lines, center(string.format("%04d-%02d", selected.year, selected.month), width))
+	line_items[#lines] = { kind = "calendar_month" }
+
+	local cell_width = math.max(4, math.floor(width / 7))
+	local grid_width = cell_width * 7
+	local margin = math.max(0, math.floor((width - grid_width) / 2))
+	local weekdays = { "Mo", "Tu", "We", "Th", "Fr", "Sa", "Su" }
+	local weekday_line = string.rep(" ", margin)
+	for _, name in ipairs(weekdays) do
+		weekday_line = weekday_line .. calendar_cell(name, cell_width)
+	end
+	table.insert(lines, weekday_line)
+	line_items[#lines] = { kind = "calendar_weekdays" }
+
+	local first_weekday = calendar.weekday(selected.year, selected.month, 1)
+	local days = calendar.days_in_month(selected.year, selected.month)
+	local weeks = math.ceil((first_weekday - 1 + days) / 7)
+
+	for week = 1, weeks do
+		local line = string.rep(" ", margin)
+		local cells = {}
+
+		for weekday = 1, 7 do
+			local day = (week - 1) * 7 + weekday - first_weekday + 1
+			local start_col = #line
+
+			if day >= 1 and day <= days then
+				local date = calendar.format(selected.year, selected.month, day)
+				local label = tostring(day) .. (counts[date] and "•" or "")
+				line = line .. calendar_cell(label, cell_width)
+				table.insert(cells, {
+					date = date,
+					has_notes = counts[date] ~= nil,
+					start_col = start_col,
+					end_col = #line,
+				})
+
+				if date == sidebar.calendar_date then
+					sidebar.calendar_cursor = {
+						line = #lines + 1,
+						col = start_col + math.floor(cell_width / 2),
+					}
+				end
+			else
+				line = line .. string.rep(" ", cell_width)
+			end
+		end
+
+		table.insert(lines, line)
+		line_items[#lines] = { kind = "calendar_week", cells = cells }
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, center("arrows day/week  [ ] month  t today", width))
+	line_items[#lines] = { kind = "help" }
+
 	return lines, line_items
 end
 
+function M.render_calendar_notes()
+	local sidebar = sidebar_state()
+	local date = sidebar.calendar_date
+	local day_notes = index.get_notes_for_calendar_date(date)
+	local lines = {}
+	local line_items = {}
+
+	if #day_notes == 0 then
+		table.insert(lines, "No notes for this day")
+		line_items[#lines] = { kind = "help" }
+	else
+		for _, note in ipairs(day_notes) do
+			local line, target_start, target_end = all_note_line(note)
+			table.insert(lines, line)
+			line_items[#lines] = {
+				kind = "note",
+				note_id = note.id,
+				target_start = target_start,
+				target_end = target_end,
+			}
+		end
+	end
+
+	return lines, line_items
+end
+
+local function reset_panel_views()
+	local sidebar = sidebar_state()
+
+	for _, win in ipairs({ sidebar.win, sidebar.calendar_notes_win }) do
+		if is_valid_win(win) then
+			pcall(vim.api.nvim_win_set_cursor, win, { 1, 0 })
+			vim.api.nvim_win_call(win, function()
+				vim.cmd("normal! zt")
+			end)
+		end
+	end
+end
+
 function M.set_mode(mode)
-	if mode ~= "all" and mode ~= "directory" and mode ~= "agenda" then
+	if mode == "agenda" then
+		mode = "calendar"
+	end
+	if mode ~= "all" and mode ~= "directory" and mode ~= "calendar" then
 		return false
 	end
 
-	sidebar_state().mode = mode
+	local sidebar = sidebar_state()
+	if mode == "calendar" then
+		close_preview_window()
+		sidebar.mode = mode
+		ensure_calendar_notes_window()
+	else
+		close_calendar_notes_window()
+		sidebar.mode = mode
+	end
+
 	M.refresh()
+	M.sync_mode_preview(true)
+	reset_panel_views()
 	return true
 end
 
@@ -584,7 +837,7 @@ function M.toggle_mode()
 	if sidebar.mode == "all" then
 		M.set_mode("directory")
 	elseif sidebar.mode == "directory" then
-		M.set_mode("agenda")
+		M.set_mode("calendar")
 	else
 		M.set_mode("all")
 	end
@@ -596,7 +849,13 @@ function M.toggle_all_sort()
 		return
 	end
 
-	sidebar.all_sort = sidebar.all_sort == "date" and "updated" or "date"
+	if sidebar.all_sort == "date" then
+		sidebar.all_sort = "updated"
+	elseif sidebar.all_sort == "updated" then
+		sidebar.all_sort = "created"
+	else
+		sidebar.all_sort = "date"
+	end
 	M.refresh()
 end
 
@@ -611,8 +870,9 @@ function M.refresh()
 
 	if sidebar.mode == "directory" then
 		lines, line_items = M.render_directory()
-	elseif sidebar.mode == "agenda" then
-		lines, line_items = M.render_agenda()
+	elseif sidebar.mode == "calendar" then
+		ensure_calendar_notes_window()
+		lines, line_items = M.render_calendar()
 	else
 		lines, line_items = M.render_all()
 	end
@@ -625,6 +885,26 @@ function M.refresh()
 	end)
 
 	apply_highlights()
+
+	if sidebar.mode == "calendar" and is_valid_buf(sidebar.calendar_notes_buf) then
+		local note_lines, note_items = M.render_calendar_notes()
+		sidebar.calendar_notes_lines = note_lines
+		sidebar.calendar_notes_items = note_items
+
+		with_modifiable(sidebar.calendar_notes_buf, function()
+			vim.api.nvim_buf_set_lines(sidebar.calendar_notes_buf, 0, -1, false, note_lines)
+		end)
+		apply_highlights(sidebar.calendar_notes_buf, note_lines, note_items)
+
+		if is_valid_win(sidebar.win) and sidebar.calendar_cursor then
+			pcall(vim.api.nvim_win_set_cursor, sidebar.win, {
+				sidebar.calendar_cursor.line,
+				sidebar.calendar_cursor.col,
+			})
+		end
+
+		M.sync_calendar_preview()
+	end
 end
 
 function M.schedule_refresh()
@@ -660,6 +940,7 @@ function M.open()
 	local current_win = vim.api.nvim_get_current_win()
 	sidebar.source_win = current_win
 	context.get_current()
+	vim.wo[current_win].winfixwidth = false
 
 	if not is_valid_buf(sidebar.buf) then
 		sidebar.buf = vim.api.nvim_create_buf(false, true)
@@ -668,9 +949,9 @@ function M.open()
 
 	local position = state.config.sidebar.position or "right"
 	if position == "left" then
-		vim.cmd("topleft vertical new")
+		vim.cmd("topleft vsplit")
 	else
-		vim.cmd("botright vertical new")
+		vim.cmd("botright vsplit")
 	end
 
 	sidebar.win = vim.api.nvim_get_current_win()
@@ -681,7 +962,7 @@ function M.open()
 		vim.api.nvim_win_set_width(sidebar.win, state.config.sidebar.width)
 	else
 		local natural_width = vim.api.nvim_win_get_width(sidebar.win)
-		local bounded_width = math.max(40, math.min(52, natural_width))
+		local bounded_width = math.max(44, math.min(56, natural_width))
 		vim.api.nvim_win_set_width(sidebar.win, bounded_width)
 	end
 	vim.wo[sidebar.win].number = false
@@ -709,9 +990,7 @@ end
 function M.close()
 	local sidebar = sidebar_state()
 
-	if is_valid_win(sidebar.preview_win) then
-		vim.api.nvim_win_close(sidebar.preview_win, true)
-	end
+	close_preview_window()
 
 	for _, win in ipairs(sidebar.note_wins or {}) do
 		if is_valid_win(win) then
@@ -721,26 +1000,34 @@ function M.close()
 
 	sidebar.note_wins = {}
 	sidebar.note_bufs = {}
-	sidebar.preview_win = nil
-	sidebar.preview_buf = nil
-	sidebar.preview_note_id = nil
+	close_calendar_notes_window()
 
 	if is_valid_win(sidebar.win) then
-		vim.api.nvim_win_close(sidebar.win, true)
+		local normal_wins = normal_windows_in_current_tab()
+
+		if #normal_wins == 1 and normal_wins[1] == sidebar.win then
+			local empty_buf = vim.api.nvim_create_buf(true, false)
+			vim.api.nvim_win_set_buf(sidebar.win, empty_buf)
+			vim.api.nvim_set_current_win(sidebar.win)
+		else
+			vim.api.nvim_win_close(sidebar.win, true)
+		end
 	end
 
 	sidebar.open = false
 	sidebar.win = nil
+	sidebar.source_win = nil
 end
 
-local function open_note_in_sidebar(note_id)
+local function open_note_in_sidebar(note_id, source_win)
 	local sidebar = sidebar_state()
+	source_win = source_win or sidebar.win
 
-	if not is_valid_win(sidebar.win) then
+	if not is_valid_win(source_win) then
 		return nil, nil
 	end
 
-	vim.api.nvim_set_current_win(sidebar.win)
+	vim.api.nvim_set_current_win(source_win)
 	notes.open(note_id)
 	local win = vim.api.nvim_get_current_win()
 	local buf = vim.api.nvim_win_get_buf(win)
@@ -777,7 +1064,8 @@ function M.open_preview(note_id, opts)
 		vim.api.nvim_win_set_buf(sidebar.preview_win, buf)
 		sidebar.preview_buf = buf
 	else
-		local win, buf = open_note_in_sidebar(note_id)
+		local source_win = sidebar.mode == "calendar" and sidebar.calendar_notes_win or sidebar.win
+		local win, buf = open_note_in_sidebar(note_id, source_win)
 		if not win then
 			return false
 		end
@@ -787,12 +1075,89 @@ function M.open_preview(note_id, opts)
 
 	sidebar.preview_note_id = note_id
 	sidebar.note_bufs[sidebar.preview_buf] = true
+	notes.apply_window_options(sidebar.preview_win)
 	if opts.focus and is_valid_win(sidebar.preview_win) then
 		vim.api.nvim_set_current_win(sidebar.preview_win)
 	elseif is_valid_win(sidebar.win) then
 		vim.api.nvim_set_current_win(sidebar.win)
 	end
 	return true
+end
+
+function M.preview_calendar_note_selected()
+	local item = selected_calendar_note_item()
+
+	if not item or item.kind ~= "note" then
+		return
+	end
+
+	local current_win = vim.api.nvim_get_current_win()
+	M.open_preview(item.note_id)
+
+	if is_valid_win(current_win) then
+		vim.api.nvim_set_current_win(current_win)
+	end
+end
+
+function M.sync_calendar_preview(force)
+	local sidebar = sidebar_state()
+	local first_note = nil
+
+	for line = 1, #(sidebar.calendar_notes_lines or {}) do
+		local item = sidebar.calendar_notes_items[line]
+		if item and item.kind == "note" then
+			first_note = item
+			break
+		end
+	end
+
+	if not first_note then
+		if is_valid_win(sidebar.preview_win)
+			and (not is_valid_buf(sidebar.preview_buf) or not vim.bo[sidebar.preview_buf].modified) then
+			close_preview_window()
+		end
+		return
+	end
+
+	local current_win = vim.api.nvim_get_current_win()
+	M.open_preview(first_note.note_id, { force = force == true })
+
+	if is_valid_win(current_win) then
+		vim.api.nvim_set_current_win(current_win)
+	end
+end
+
+function M.sync_mode_preview(force)
+	local sidebar = sidebar_state()
+
+	if sidebar.mode == "calendar" then
+		M.sync_calendar_preview(force)
+		return
+	end
+
+	local first_note = nil
+	for line = 1, #(sidebar.lines or {}) do
+		local item = sidebar.line_items[line]
+		if item and item.kind == "note" then
+			first_note = item
+			break
+		end
+	end
+
+	if not first_note then
+		if is_valid_win(sidebar.preview_win)
+			and (not is_valid_buf(sidebar.preview_buf) or not vim.bo[sidebar.preview_buf].modified) then
+			close_preview_window()
+		end
+		return
+	end
+
+	local current_win = vim.api.nvim_get_current_win()
+	M.open_preview(first_note.note_id, { force = force == true })
+
+	if is_valid_win(current_win) then
+		vim.api.nvim_set_current_win(current_win)
+	end
 end
 
 function M.preview_selected()
@@ -816,6 +1181,21 @@ end
 
 function M.handle_enter()
 	local sidebar = sidebar_state()
+
+	if sidebar.mode == "calendar" then
+		if is_valid_win(sidebar.calendar_notes_win) then
+			vim.api.nvim_set_current_win(sidebar.calendar_notes_win)
+			for line = 1, #(sidebar.calendar_notes_lines or {}) do
+				local item = sidebar.calendar_notes_items[line]
+				if item and item.kind == "note" then
+					vim.api.nvim_win_set_cursor(sidebar.calendar_notes_win, { line, 0 })
+					break
+				end
+			end
+		end
+		return
+	end
+
 	local item = selected_item()
 
 	if item and item.kind == "note" then
@@ -843,6 +1223,7 @@ end
 function M.handle_create()
 	notes.create({
 		title = "Untitled",
+		calendar_date = sidebar_state().mode == "calendar" and sidebar_state().calendar_date or nil,
 		on_created = function()
 			M.refresh()
 		end,
@@ -850,7 +1231,7 @@ function M.handle_create()
 end
 
 function M.handle_create_for_context()
-	local ctx = context.get_current()
+	local ctx = context.get_association_target()
 
 	if not ctx or not ctx.target_path then
 		vim.notify("seijaku: no current filesystem target found", vim.log.levels.WARN)
@@ -861,15 +1242,14 @@ function M.handle_create_for_context()
 		title = paths.basename(ctx.target_path) or "Untitled",
 		target_path = ctx.target_path,
 		target_type = ctx.target_type,
+		calendar_date = sidebar_state().mode == "calendar" and sidebar_state().calendar_date or nil,
 		on_created = function()
 			M.refresh()
 		end,
 	})
 end
 
-function M.handle_rename()
-	local item = selected_item()
-
+local function rename_item(item)
 	if not item or item.kind ~= "note" then
 		return
 	end
@@ -892,9 +1272,15 @@ function M.handle_rename()
 	end)
 end
 
-function M.handle_delete()
-	local item = selected_item()
+function M.handle_rename()
+	return rename_item(selected_item())
+end
 
+function M.handle_calendar_rename()
+	return rename_item(selected_calendar_note_item())
+end
+
+local function delete_item(item)
 	if not item or item.kind ~= "note" then
 		return
 	end
@@ -911,6 +1297,14 @@ function M.handle_delete()
 	M.refresh()
 end
 
+function M.handle_delete()
+	return delete_item(selected_item())
+end
+
+function M.handle_calendar_delete()
+	return delete_item(selected_calendar_note_item())
+end
+
 function M.handle_detach_current()
 	local item = selected_item()
 
@@ -918,7 +1312,7 @@ function M.handle_detach_current()
 		return
 	end
 
-	local ctx = context.get_current()
+	local ctx = context.get_association_target()
 	local target_path = item.target_path or (ctx and ctx.target_path) or nil
 	if not target_path then
 		vim.notify("seijaku: no target to detach from this note", vim.log.levels.WARN)
@@ -933,6 +1327,93 @@ function M.handle_detach_current()
 
 	vim.notify("seijaku: detached path")
 	M.refresh()
+end
+
+function M.calendar_move_days(amount)
+	local sidebar = sidebar_state()
+	local selected = calendar.parse(sidebar.calendar_date) or calendar.today()
+	local result = calendar.add_days(selected, amount)
+	sidebar.calendar_date = calendar.format(result.year, result.month, result.day)
+	M.refresh()
+end
+
+function M.calendar_move_months(amount)
+	local sidebar = sidebar_state()
+	local selected = calendar.parse(sidebar.calendar_date) or calendar.today()
+	local result = calendar.add_months(selected, amount)
+	sidebar.calendar_date = calendar.format(result.year, result.month, result.day)
+	M.refresh()
+end
+
+function M.calendar_today()
+	local today = calendar.today()
+	sidebar_state().calendar_date = calendar.format(today.year, today.month, today.day)
+	M.refresh()
+end
+
+function M.calendar_month_edge(last)
+	local sidebar = sidebar_state()
+	local selected = calendar.parse(sidebar.calendar_date) or calendar.today()
+	selected.day = last and calendar.days_in_month(selected.year, selected.month) or 1
+	sidebar.calendar_date = calendar.format(selected.year, selected.month, selected.day)
+	M.refresh()
+end
+
+function M.handle_calendar_note_enter()
+	local item = selected_calendar_note_item()
+
+	if item and item.kind == "note" then
+		M.open_preview(item.note_id, { force = true, focus = true })
+	end
+end
+
+function M.handle_calendar_clear_date()
+	local item = selected_calendar_note_item()
+
+	if not item or item.kind ~= "note" then
+		return
+	end
+
+	local ok, err = index.set_calendar_date(item.note_id, nil)
+	if not ok then
+		vim.notify("seijaku: " .. tostring(err or "failed to clear calendar date"), vim.log.levels.ERROR)
+		return
+	end
+
+	vim.notify("seijaku: calendar date cleared")
+	M.refresh()
+end
+
+local function calendar_or_normal(callback, normal_key)
+	if sidebar_state().mode == "calendar" then
+		callback()
+	elseif normal_key then
+		vim.cmd("normal! " .. normal_key)
+	end
+end
+
+function M.setup_calendar_notes_mappings(buf)
+	local opts = {
+		buffer = buf,
+		silent = true,
+		nowait = true,
+	}
+
+	vim.keymap.set("n", "<CR>", M.handle_calendar_note_enter, opts)
+	vim.keymap.set("n", "a", M.handle_create_for_context, opts)
+	vim.keymap.set("n", "n", M.handle_create, opts)
+	vim.keymap.set("n", "x", M.handle_calendar_clear_date, opts)
+	vim.keymap.set("n", "r", M.handle_calendar_rename, opts)
+	vim.keymap.set("n", "dd", M.handle_calendar_delete, opts)
+	vim.keymap.set("n", "<Tab>", M.toggle_mode, opts)
+	vim.keymap.set("n", "R", M.refresh, opts)
+
+	vim.api.nvim_create_autocmd("CursorMoved", {
+		buffer = buf,
+		callback = function()
+			vim.schedule(M.preview_calendar_note_selected)
+		end,
+	})
 end
 
 function M.setup_mappings(buf)
@@ -951,6 +1432,69 @@ function M.setup_mappings(buf)
 	vim.keymap.set("n", "<Tab>", M.toggle_mode, opts)
 	vim.keymap.set("n", "s", M.toggle_all_sort, opts)
 	vim.keymap.set("n", "R", M.refresh, opts)
+	vim.keymap.set("n", "h", function()
+		calendar_or_normal(function()
+			M.calendar_move_days(-1)
+		end, "h")
+	end, opts)
+	vim.keymap.set("n", "l", function()
+		calendar_or_normal(function()
+			M.calendar_move_days(1)
+		end, "l")
+	end, opts)
+	vim.keymap.set("n", "k", function()
+		calendar_or_normal(function()
+			M.calendar_move_days(-7)
+		end, "k")
+	end, opts)
+	vim.keymap.set("n", "j", function()
+		calendar_or_normal(function()
+			M.calendar_move_days(7)
+		end, "j")
+	end, opts)
+	vim.keymap.set("n", "<Left>", function()
+		calendar_or_normal(function()
+			M.calendar_move_days(-1)
+		end, "h")
+	end, opts)
+	vim.keymap.set("n", "<Right>", function()
+		calendar_or_normal(function()
+			M.calendar_move_days(1)
+		end, "l")
+	end, opts)
+	vim.keymap.set("n", "<Up>", function()
+		calendar_or_normal(function()
+			M.calendar_move_days(-7)
+		end, "k")
+	end, opts)
+	vim.keymap.set("n", "<Down>", function()
+		calendar_or_normal(function()
+			M.calendar_move_days(7)
+		end, "j")
+	end, opts)
+	vim.keymap.set("n", "[", function()
+		calendar_or_normal(function()
+			M.calendar_move_months(-1)
+		end)
+	end, opts)
+	vim.keymap.set("n", "]", function()
+		calendar_or_normal(function()
+			M.calendar_move_months(1)
+		end)
+	end, opts)
+	vim.keymap.set("n", "t", function()
+		calendar_or_normal(M.calendar_today)
+	end, opts)
+	vim.keymap.set("n", "gg", function()
+		calendar_or_normal(function()
+			M.calendar_month_edge(false)
+		end, "gg")
+	end, opts)
+	vim.keymap.set("n", "G", function()
+		calendar_or_normal(function()
+			M.calendar_month_edge(true)
+		end, "G")
+	end, opts)
 
 	vim.api.nvim_create_autocmd("CursorMoved", {
 		buffer = buf,

@@ -19,6 +19,7 @@ local state = {
 
   context = {
     last = nil,
+    association = nil,
   },
 
   timers = {
@@ -42,6 +43,12 @@ local state = {
     preview_win = nil,
     preview_buf = nil,
     preview_note_id = nil,
+    calendar_date = nil,
+    calendar_cursor = nil,
+    calendar_notes_win = nil,
+    calendar_notes_buf = nil,
+    calendar_notes_lines = {},
+    calendar_notes_items = {},
   },
 }
 
@@ -51,6 +58,9 @@ function M.setup(config)
   state.index_path = config.vault_dir .. "/index.json"
   state.root_dir = vim.fn.fnamemodify(vim.loop.cwd(), ":p"):gsub("/$", "")
   state.sidebar.mode = config.sidebar.default_mode or "all"
+  if state.sidebar.mode == "agenda" then
+    state.sidebar.mode = "calendar"
+  end
   state.sidebar.all_sort = config.sidebar.default_all_sort or "date"
   state.sidebar.current_dir = nil
   state.sidebar.current_target = nil
@@ -62,7 +72,14 @@ function M.setup(config)
   state.sidebar.preview_win = nil
   state.sidebar.preview_buf = nil
   state.sidebar.preview_note_id = nil
+  state.sidebar.calendar_date = os.date("%Y-%m-%d")
+  state.sidebar.calendar_cursor = nil
+  state.sidebar.calendar_notes_win = nil
+  state.sidebar.calendar_notes_buf = nil
+  state.sidebar.calendar_notes_lines = {}
+  state.sidebar.calendar_notes_items = {}
   state.context.last = nil
+  state.context.association = nil
 end
 
 function M.get()

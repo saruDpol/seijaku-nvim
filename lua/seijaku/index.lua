@@ -6,6 +6,14 @@ local util = require("seijaku.util")
 
 local save_timer = nil
 
+local function sync_note_metadata(note)
+  local ok, notes = pcall(require, "seijaku.notes")
+
+  if ok and type(notes.sync_metadata) == "function" then
+    notes.sync_metadata(note)
+  end
+end
+
 local function empty_index()
   return {
     version = 1,
@@ -238,6 +246,63 @@ function M.list_notes()
   return result
 end
 
+function M.calendar_date(note)
+  if note and note.calendar_date then
+    return note.calendar_date
+  end
+
+  return note and tostring(note.created_at or ""):match("^(%d%d%d%d%-%d%d%-%d%d)") or nil
+end
+
+function M.get_notes_for_calendar_date(date)
+  local result = {}
+
+  for _, note in pairs(state_mod.get().notes_by_id or {}) do
+    if M.calendar_date(note) == date then
+      table.insert(result, note)
+    end
+  end
+
+  table.sort(result, function(a, b)
+    return tostring(a.updated_at or "") > tostring(b.updated_at or "")
+  end)
+
+  return result
+end
+
+function M.get_calendar_counts(year, month)
+  local prefix = string.format("%04d-%02d-", year, month)
+  local counts = {}
+
+  for _, note in pairs(state_mod.get().notes_by_id or {}) do
+    local date = M.calendar_date(note)
+    if date and date:sub(1, #prefix) == prefix then
+      counts[date] = (counts[date] or 0) + 1
+    end
+  end
+
+  return counts
+end
+
+function M.set_calendar_date(note_id, date)
+  local note = M.get_note(note_id)
+
+  if not note then
+    return false, "note not found"
+  end
+
+  if date ~= nil and not require("seijaku.calendar").parse(date) then
+    return false, "invalid calendar date"
+  end
+
+  note.calendar_date = date
+  note.updated_at = util.now()
+  M.mark_dirty()
+  sync_note_metadata(note)
+
+  return true
+end
+
 function M.attach(note_id, target_path, target_type)
   local state = state_mod.get()
   local index = state.index
@@ -285,6 +350,7 @@ function M.attach(note_id, target_path, target_type)
 
   M.rebuild_derived_indexes()
   M.mark_dirty()
+  sync_note_metadata(note)
 
   return true
 end
@@ -329,6 +395,7 @@ function M.detach(note_id, target_path)
 
   M.rebuild_derived_indexes()
   M.mark_dirty()
+  sync_note_metadata(note)
 
   return true
 end
@@ -407,8 +474,10 @@ function M.get_notes_for_tree(dir_path)
     return grouped
   end
 
+  local prefix = dir_path == "/" and "/" or dir_path .. "/"
+
   for target_path, _ in pairs(state.note_ids_by_target or {}) do
-    if paths.inside_dir(target_path, dir_path) then
+    if target_path == dir_path or target_path:sub(1, #prefix) == prefix then
       grouped[target_path] = M.get_notes_for_target(target_path)
     end
   end

@@ -45,7 +45,9 @@ end
 
 local function remember(ctx)
   if ctx and ctx.target_path and ctx.directory then
-    state_mod.get().context.last = vim.deepcopy(ctx)
+    local context_state = state_mod.get().context
+    context_state.last = vim.deepcopy(ctx)
+    context_state.association = vim.deepcopy(ctx)
   end
 
   return ctx
@@ -71,7 +73,24 @@ local function oil_context()
     return nil
   end
 
-  return remember(context_for_target(dir, "directory", "oil"))
+  local directory_context = context_for_target(dir, "directory", "oil")
+  local association_context = directory_context
+
+  if type(oil.get_cursor_entry) == "function" then
+    local entry = oil.get_cursor_entry()
+
+    if entry and entry.name and entry.name ~= "" then
+      local target_path = paths.join(dir, entry.name)
+      local target_type = entry.type or paths.target_type(target_path)
+
+      association_context = context_for_target(target_path, target_type, "oil")
+    end
+  end
+
+  remember(directory_context)
+  state.context.association = vim.deepcopy(association_context)
+
+  return directory_context
 end
 
 function M.get_current()
@@ -92,7 +111,7 @@ function M.get_current()
     return oil_context() or fallback_context()
   end
 
-  if buftype == "nofile" or filetype == "seijaku" then
+  if filetype == "seijaku" then
     return fallback_context()
   end
 
@@ -103,6 +122,13 @@ function M.get_current()
   local normalized = paths.normalize(bufname)
 
   if not normalized then
+    return fallback_context()
+  end
+
+  -- Some viewers use a special buffer for real files (for example binary
+  -- documents). Treat them as filesystem contexts when the backing path
+  -- exists, regardless of extension.
+  if buftype ~= "" and buftype ~= "acwrite" and not vim.loop.fs_stat(normalized) then
     return fallback_context()
   end
 
@@ -121,6 +147,26 @@ function M.get_current()
   end
 
   return remember(context_for_target(normalized, paths.target_type(normalized), "buffer"))
+end
+
+function M.get_association_target()
+  local state = state_mod.get()
+  local current_buf = vim.api.nvim_get_current_buf()
+
+  if vim.bo.filetype == "oil" then
+    oil_context()
+    return state.context.association and vim.deepcopy(state.context.association) or fallback_context()
+  end
+
+  if vim.bo.filetype == "seijaku"
+      or (state.sidebar
+        and state.sidebar.open
+        and state.sidebar.note_bufs
+        and state.sidebar.note_bufs[current_buf]) then
+    return state.context.association and vim.deepcopy(state.context.association) or fallback_context()
+  end
+
+  return M.get_current()
 end
 
 return M

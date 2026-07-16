@@ -7,6 +7,12 @@ local util = require("seijaku.util")
 
 local metadata_start = "<!-- seijaku:metadata:start -->"
 local metadata_end = "<!-- seijaku:metadata:end -->"
+local note_types = {
+  { value = "general", label = "1  General" },
+  { value = "diary", label = "2  Diary" },
+  { value = "meeting", label = "3  Meeting" },
+  { value = "desc", label = "4  Description" },
+}
 
 local function refresh_sidebar()
   local ok, sidebar = pcall(require, "seijaku.sidebar")
@@ -56,9 +62,61 @@ local function prompt_title(default, callback)
   end)
 end
 
+local function prompt_note_type(default, callback)
+  if default then
+    callback(default)
+    return
+  end
+
+  local choices = {}
+  for index_in_list, item in ipairs(note_types) do
+    choices[tostring(index_in_list)] = item.value
+  end
+
+  while true do
+    vim.api.nvim_echo({ {
+      "Note type  1 General  2 Diary  3 Meeting  4 Description  (Esc cancel)",
+      "Question",
+    } }, false, {})
+    local ok, key = pcall(vim.fn.getcharstr)
+    vim.api.nvim_echo({}, false, {})
+
+    if not ok or key == "\027" then
+      return
+    end
+
+    if choices[key] then
+      callback(choices[key])
+      return
+    end
+  end
+end
+
+local function default_title_for_type(note_type, opts)
+  if note_type == "diary" then
+    return "diary"
+  end
+
+  local associated_file = nil
+  if opts.target_path and opts.target_type == "file" then
+    associated_file = paths.basename(opts.target_path)
+  end
+
+  if note_type == "meeting" then
+    return "meeting-" .. (associated_file or "")
+  end
+
+  if note_type == "desc" then
+    return "desc_" .. (associated_file or "")
+  end
+
+  return opts.title or "Untitled"
+end
+
 local function metadata_lines(note)
   local lines = {
     metadata_start,
+    "> Type: `" .. tostring(note.note_type or "general") .. "`",
     "> Created: `" .. tostring(note.created_at or "") .. "`",
     "> Updated: `" .. tostring(note.updated_at or "") .. "`",
   }
@@ -162,56 +220,57 @@ end
 function M.create(opts)
   opts = opts or {}
 
-  local default_title = opts.title or "Untitled"
+  prompt_note_type(opts.note_type, function(note_type)
+    prompt_title(default_title_for_type(note_type, opts), function(title)
+      local state = state_mod.get()
+      local note_id = M.generate_id()
+      local rel_path = M.note_relative_path(note_id)
+      local abs_path = paths.join(state.vault_dir, rel_path)
+      local now = util.now()
 
-  prompt_title(default_title, function(title)
-    local state = state_mod.get()
-    local note_id = M.generate_id()
-    local rel_path = M.note_relative_path(note_id)
-    local abs_path = paths.join(state.vault_dir, rel_path)
-    local now = util.now()
+      local note = {
+        id = note_id,
+        title = title,
+        file = rel_path,
+        created_at = now,
+        updated_at = now,
+        note_type = note_type,
+        calendar_date = opts.calendar_date,
+        targets = {},
+        tags = {},
+      }
 
-    local note = {
-      id = note_id,
-      title = title,
-      file = rel_path,
-      created_at = now,
-      updated_at = now,
-      calendar_date = opts.calendar_date,
-      targets = {},
-      tags = {},
-    }
+      index.add_note(note)
 
-    index.add_note(note)
-
-    if opts.target_path then
-      index.attach(note_id, opts.target_path, opts.target_type)
-    end
-
-    local initial_lines = {}
-    vim.list_extend(initial_lines, metadata_lines(note))
-    table.insert(initial_lines, "")
-    table.insert(initial_lines, "# " .. title)
-    table.insert(initial_lines, "")
-    util.write_file(abs_path, initial_lines)
-
-    if opts.open ~= false then
-      local sidebar_ok, sidebar = pcall(require, "seijaku.sidebar")
-      local opened_in_sidebar = sidebar_ok and sidebar.open_preview(note_id, {
-        force = true,
-        focus = true,
-      })
-
-      if not opened_in_sidebar then
-        M.open(note_id)
+      if opts.target_path then
+        index.attach(note_id, opts.target_path, opts.target_type)
       end
-    end
 
-    if opts.on_created then
-      opts.on_created(note)
-    end
+      local initial_lines = {}
+      vim.list_extend(initial_lines, metadata_lines(note))
+      table.insert(initial_lines, "")
+      table.insert(initial_lines, "# " .. title)
+      table.insert(initial_lines, "")
+      util.write_file(abs_path, initial_lines)
 
-    refresh_sidebar()
+      if opts.open ~= false then
+        local sidebar_ok, sidebar = pcall(require, "seijaku.sidebar")
+        local opened_in_sidebar = sidebar_ok and sidebar.open_preview(note_id, {
+          force = true,
+          focus = true,
+        })
+
+        if not opened_in_sidebar then
+          M.open(note_id)
+        end
+      end
+
+      if opts.on_created then
+        opts.on_created(note)
+      end
+
+      refresh_sidebar()
+    end)
   end)
 end
 

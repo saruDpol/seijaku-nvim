@@ -1,5 +1,73 @@
 # Devlog
 
+## Actualitzacio - 2026-07-16
+
+### Tipus de nota i filtres
+
+- En crear qualsevol nota ara se'n tria el tipus: `general`, `diary`,
+  `meeting` o `description`.
+- El tipus es desa a `index.json` i apareix a la capcalera Markdown generada.
+  Les notes anteriors sense tipus es tracten com a `general`.
+- Les files de nota comparteixen el mateix codi de color a `all`, `directory` i
+  `calendar`: blau ai fosc, daurat, taronja i verd Seijaku, saturats sense ser
+  lluminosos.
+- Cada tipus te una marca visual propia.
+- Les icones de nota passen a marques tipografiques petites (`·`, `◷`, `○`,
+  `≡`) per reduir el pes visual.
+- La paleta queda en tons japonesos foscos pero saturats: menys lluminosos,
+  mantenint una identitat cromatica clara.
+- Els titols suggerits depenen del tipus: `diary`, `meeting-<fitxer>` i
+  `desc_<fitxer>`; sense associacio queden preparats com `meeting-` i `desc_`.
+- El mode `all` mostra per separat l'ordre i el filtre actius. `s` continua
+  canviant `date/updated/created`, mentre `f` recorre
+  `all/general/diary/meeting/desc`; tots dos estats es poden combinar.
+- Nova opcio `sidebar.default_all_filter`, amb valor inicial `"all"`.
+- El selector de tipus accepta `1`-`4` amb una sola tecla, sense Enter; `Esc`
+  cancel·la la creacio.
+- La dreta verda de la capcalera es contextual: ordre/filtre a `all`, ajuda de
+  navegacio compacta `[/] month  t today` a `calendar` i marca Seijaku a
+  `directory`. S'eliminen les guies duplicades del cos, el dia seleccionat usa
+  el vermell dels modes actius i `YYYY-MM` usa el verd Seijaku.
+- Entrar a una preview ja no provoca un refresh via `BufEnter`, i els refreshes
+  legitims del calendari conserven la nota seleccionada en lloc de saltar a la
+  primera nota del dia.
+- El panell superior del calendari reserva dinamicament les linies exactes del
+  mes renderitzat. La llista diaria i les previews absorbeixen els canvis de
+  layout sense provocar overflow ni retallar setmanes del calendari.
+- La preview gestionada ja no depen d'una finestra fixa: si es tanca i queda un
+  split de nota addicional, aquest adopta el rol i passa a seguir la seleccio.
+- `all` i `directory` reparteixen dinamicament la columna entre llista, preview
+  i notes addicionals. En sortir de `calendar` es desmunta la geometria diaria i
+  es recalcula el layout normal, sense heretar-ne l'alcada.
+- Nova politica standalone configurable amb
+  `sidebar.standalone_layout = "vertical"`: sense finestres externes, la preview
+  i les notes gestionades son columnes verticals a l'esquerra del sidebar.
+- Al standalone de calendari, calendari i llista diaria conserven la columna
+  dreta apilada i la preview ocupa una columna completa a l'esquerra.
+- Entrar o sortir de `calendar` en standalone conserva les finestres de preview
+  i notes addicionals. Navegar a un dia buit mante la preview i el seu contingut
+  en lloc de tancar-la i provocar un reflow sobtat.
+- La mateixa invariant s'aplica a `directory` sense context/notes i als filtres
+  buits d'`all`: un canvi de mode mai consumeix la preview ni va promovent i
+  tancant les notes addicionals en cada volta de `Tab`.
+- La propietat es determina per IDs de finestra. Splits manuals o de tercers son
+  externs encara que mostrin una nota, no es reutilitzen ni es redimensionen, i
+  si es creen despres d'entrar en standalone no provoquen cap reflow sobtat.
+- Una sessio docked passa a standalone quan desapareix l'ultima finestra
+  externa; en reobrir el sidebar la politica es calcula de nou.
+
+### Documentacio
+
+- README reestructurat com una guia compacta amb identitat visual minimalista,
+  exemple de la UI i seccions curtes per notes, modes, calendari, layouts,
+  comandes, configuracio i vault.
+- Instal·lacio remota amb Lazy.nvim/LazyVim, checkout local amb `dir` i paquet
+  natiu local documentats per separat.
+- Afegits diagrames dels layouts docked/standalone i explicada la frontera
+  entre finestres gestionades i splits externs.
+- Eliminades descripcions obsoletes sobre dies buits, previews i geometries que
+  ja no representaven el comportament actual.
+
 ## Actualitzacio - 2026-07-14
 
 ### Calendari
@@ -212,8 +280,10 @@ Es pot desactivar o canviar amb:
 require("seijaku").setup({
   sidebar = {
     width = "auto",
+    standalone_layout = "vertical",
     default_mode = "directory",
     default_all_sort = "date",
+    default_all_filter = "all",
   },
   editor = {
     wrap = true,
@@ -243,6 +313,7 @@ r      renombrar nota
 dd     eliminar nota
 Tab    alternar all/directory/calendar
 s      alternar date/updated/created en mode all
+f      filtrar all/general/diary/meeting/desc en mode all
 R      refrescar
 ```
 
@@ -264,6 +335,8 @@ La sidebar renderitza:
 - `date` agrupa per `calendar_date`, amb fallback a `created_at`.
 - `updated` ordena per ultima modificacio.
 - `created` agrupa estrictament per data de creacio.
+- `f` filtra independentment per tipus de nota i es combina amb qualsevol
+  ordre seleccionat amb `s`.
 
 `directory`:
 

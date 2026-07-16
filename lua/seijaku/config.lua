@@ -6,8 +6,10 @@ local defaults = {
   sidebar = {
     width = "auto",
     position = "right",
+    standalone_layout = "vertical",
     default_mode = "directory",
     default_all_sort = "date",
+    default_all_filter = "all",
     all_mode_limit = 500,
     debounce_ms = 150,
   },

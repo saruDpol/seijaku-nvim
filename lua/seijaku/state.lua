@@ -33,6 +33,9 @@ local state = {
     buf = nil,
     mode = "all",
     all_sort = "date",
+    all_filter = "all",
+    layout_mode = "docked",
+    standalone_host_win = nil,
     current_dir = nil,
     current_target = nil,
     lines = {},
@@ -62,6 +65,9 @@ function M.setup(config)
     state.sidebar.mode = "calendar"
   end
   state.sidebar.all_sort = config.sidebar.default_all_sort or "date"
+  state.sidebar.all_filter = config.sidebar.default_all_filter or "all"
+  state.sidebar.layout_mode = "docked"
+  state.sidebar.standalone_host_win = nil
   state.sidebar.current_dir = nil
   state.sidebar.current_target = nil
   state.sidebar.lines = {}

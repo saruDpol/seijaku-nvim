@@ -5,8 +5,20 @@ function M.setup()
 
   vim.api.nvim_create_autocmd({ "BufEnter", "DirChanged" }, {
     group = group,
-    callback = function()
+    callback = function(args)
       local state = require("seijaku.state").get()
+
+      if args.event == "BufEnter" then
+        local sidebar = state.sidebar
+        local managed = args.buf == sidebar.buf
+          or args.buf == sidebar.calendar_notes_buf
+          or args.buf == sidebar.preview_buf
+          or sidebar.note_bufs[args.buf] == true
+
+        if managed then
+          return
+        end
+      end
 
       if state.sidebar.open then
         require("seijaku.sidebar").schedule_refresh()
@@ -57,6 +69,18 @@ function M.setup()
           require("seijaku.sidebar").schedule_refresh()
         end
       end
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = group,
+    callback = function()
+      vim.schedule(function()
+        local state = require("seijaku.state").get()
+        if state.sidebar.open then
+          require("seijaku.sidebar").reconcile_note_windows()
+        end
+      end)
     end,
   })
 

@@ -1,20 +1,40 @@
-# seijaku.nvim
+# 静寂 seijaku.nvim
 
-A fast Markdown notes manager for Neovim with filesystem associations.
+> A quiet, filesystem-aware Markdown notebook for Neovim.
 
-## Status
+`seijaku.nvim` keeps notes close to the files, directories and dates they
+belong to. It uses real Neovim splits, a small JSON index and ordinary Markdown
+files—no database, web view or proprietary format.
 
-Early development.
+```text
+静寂                         sort date | filter all
+────────────────────────────────────────────────
+date                     dir                     cal
 
-## Concept
+ 2026-07-16
+   · project notes                     README.md
+   ◷ diary
+   ○ meeting-api                         api.lua
+   ≡ desc_config                        config.lua
+```
 
-`seijaku.nvim` manages a Markdown notes vault and lets you associate notes with files and directories in your filesystem.
+Early development, already usable as a daily notes workflow.
 
-A note can be global or associated with one or more filesystem paths.
+## ◆ Highlights
 
-## Installation
+- Three views: global index, filesystem context and calendar.
+- Notes attach to any file or directory, including images, video and office
+  documents.
+- Four note types with independent color, icon and filtering.
+- Calendar scheduling independent from creation and modification dates.
+- Dynamic preview plus additional managed note splits.
+- Adaptive docked and standalone layouts.
+- Soft-wrapped Markdown and compact generated metadata.
+- Optional awareness of Oil, netrw, Telescope and `nvim-web-devicons`.
 
-### lazy.nvim / LazyVim
+## ↓ Install
+
+### Lazy.nvim / LazyVim
 
 Create `~/.config/nvim/lua/plugins/seijaku.lua`:
 
@@ -28,8 +48,10 @@ return {
       vault_dir = "~/Notes/seijaku",
       sidebar = {
         width = "auto",
+        standalone_layout = "vertical",
         default_mode = "directory",
         default_all_sort = "date",
+        default_all_filter = "all",
       },
       editor = {
         wrap = true,
@@ -46,63 +68,178 @@ return {
 }
 ```
 
-Restart Neovim and run:
+Restart Neovim and run `:Lazy sync`. Lazy calls
+`require("seijaku").setup(opts)` automatically.
 
-```vim
-:Lazy sync
-```
+### Local checkout
 
-`lazy.nvim` clones the GitHub repository and calls
-`require("seijaku").setup(opts)` automatically. Future `:Lazy sync` or
-`:Lazy update seijaku-nvim` runs fetch new commits; restart Neovim after an
-update so already loaded Lua modules and plugin state are recreated cleanly.
-
-### Configuration
-
-By default, the vault is created at `~/Notes/seijaku`. Customize the `opts`
-table in the Lazy spec when needed:
+For a local clone or active development, point Lazy directly at the directory:
 
 ```lua
-opts = {
+return {
+  {
+    dir = "/absolute/path/to/seijaku",
+    name = "seijaku.nvim",
+    main = "seijaku",
+    lazy = false,
+    opts = {
+      vault_dir = "~/Notes/seijaku",
+    },
+  },
+}
+```
+
+Edits are visible directly; no `:Lazy sync` is required. Restart Neovim after
+changing Lua code so cached modules are loaded again.
+
+Without a plugin manager, place or symlink the repository under a native
+package path and call setup from `init.lua`:
+
+```text
+~/.local/share/nvim/site/pack/dev/start/seijaku.nvim
+```
+
+```lua
+require("seijaku").setup({
   vault_dir = "~/Notes/seijaku",
-  editor = {
-    wrap = true,
-    linebreak = true,
-    breakindent = true,
-  },
-  keymaps = {
-    enable_default = true,
-    toggle = "<A-o>",
-    new_for_current = "<leader>a",
-  },
-}
+})
 ```
 
-Set an individual mapping to `false`, or set `enable_default = false` to
-disable all global defaults.
+## ◇ Notes
 
-### Local development
+Creating a note first opens a one-key type selector—pressing `1`–`4` accepts
+immediately; `Esc` cancels.
 
-Add the repository as a local plugin in your Lazy specification:
+| Key | Type | Mark | Suggested title |
+| --- | --- | :---: | --- |
+| `1` | General | `·` | Current target or `Untitled` |
+| `2` | Diary | `◷` | `diary` |
+| `3` | Meeting | `○` | `meeting-<filename>` |
+| `4` | Description | `≡` | `desc_<filename>` |
 
-```lua
-{
-  dir = "/home/sarudpol/main/seijaku",
-  name = "seijaku.nvim",
-  lazy = false,
-  opts = {
-    vault_dir = "~/Notes/seijaku",
-  },
-}
+General, diary, meeting and description rows use dark Japanese-inspired blue,
+gold, orange and Seijaku green. Existing notes without a stored type remain
+general.
+
+Every new note starts with a small generated header before its title:
+
+```markdown
+<!-- seijaku:metadata:start -->
+> Type: `meeting`
+> Created: `2026-07-16T18:30:00`
+> Updated: `2026-07-16T18:30:00`
+> Target: `/project/api.lua`
+> Date: `2026-07-18`
+<!-- seijaku:metadata:end -->
+
+# meeting-api.lua
 ```
 
-`lazy.nvim` automatically calls `require("seijaku").setup(opts)`, so no manual
-`runtimepath` or command-line setup is needed. Because this uses `dir`, edits in
-this repository are already visible and do not need `:Lazy sync`. Restart Neovim
-after changing Lua code: `:Lazy sync` does not unload modules already cached in
-`package.loaded` in the current session.
+The header stays synchronized when metadata changes. `index.json` remains the
+source of truth; Seijaku does not parse Markdown to rebuild operational state.
 
-## Commands
+## ⌁ Sidebar
+
+Open it with `Alt-o` or `:SeijakuToggle`. The default view is `directory`.
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Open the selected note or enter the calendar day list |
+| `a` | Create a note for the current filesystem context |
+| `n` | Create a global note |
+| `r` | Rename the selected note |
+| `dd` | Delete the selected note |
+| `x` | Detach the current target; clear a calendar date in the day list |
+| `Tab` | Cycle `all → directory → calendar` |
+| `s` | Cycle `date → updated → created` sorting in `all` |
+| `f` | Cycle the note-type filter in `all` |
+| `R` | Refresh |
+
+The green text in the top-right header is contextual: sort/filter state in
+`all`, `[/] month  t today` in `calendar`, and the Seijaku label in
+`directory`.
+
+### all
+
+- `date`: groups by calendar date, falling back to creation date.
+- `updated`: sorts by the last content or metadata update.
+- `created`: groups strictly by creation day.
+- `f`: independently cycles `all`, `general`, `diary`, `meeting` and `desc`.
+
+Sorting and filtering combine freely. The first associated target appears on
+the right of each row.
+
+### directory
+
+For a file, the view shows notes attached exactly to that file. For a directory
+or Oil buffer, it renders a filtered recursive tree containing annotated paths
+and the intermediate directories needed to reach them.
+
+In Oil, the entry under the cursor is used for association actions; the view
+itself continues to represent the open directory and its descendants. Any real
+filesystem file is a valid target regardless of extension or file type.
+
+### calendar
+
+The Gregorian calendar renders any month from year 1 through 9999. `YYYY-MM`
+uses Seijaku green; the selected day uses the active-mode red. Days containing
+notes are marked.
+
+| Key | Calendar action |
+| --- | --- |
+| `h/l`, `←/→` | Previous/next day |
+| `j/k`, `↓/↑` | Next/previous week |
+| `[/]` | Previous/next month |
+| `gg/G` | First/last day of the month |
+| `t` | Today |
+| `Enter` | Focus the notes for the selected day |
+
+Calendar and day notes are separate navigable windows. The calendar reserves
+exactly the height required by five- or six-week months, so previews cannot
+clip it. Moving through day notes updates the managed preview. A day without
+notes keeps the current preview and layout unchanged.
+
+Notes created here receive an explicit `calendar_date`. Notes without one
+appear on their creation day; `x` clears an explicit date and restores that
+fallback.
+
+## ▦ Layouts
+
+With a normal editor window, Seijaku is docked on the side. In `all` and
+`directory`, its list, preview and additional notes share the sidebar column
+evenly. Closing the dynamic preview promotes the most recently opened managed
+note window to that role.
+
+When no meaningful external window remains and
+`sidebar.standalone_layout = "vertical"`, notes become full-height columns to
+the left of the sidebar:
+
+```text
+┌──────────────┬──────────────┬─────────────┐
+│ dynamic note │ fixed note   │ sidebar     │
+└──────────────┴──────────────┴─────────────┘
+```
+
+Calendar keeps its two internal panels on the right:
+
+```text
+┌─────────────────────────────┬─────────────┐
+│                             │ calendar    │
+│ dynamic note                ├─────────────┤
+│                             │ day notes   │
+└─────────────────────────────┴─────────────┘
+```
+
+Window ownership is explicit. Sidebar panels and notes opened by Seijaku are
+managed; manual splits and windows created by other plugins are external—even
+if they show the same note buffer. Seijaku never reuses or resizes those
+external windows, and creating one during a standalone session causes no
+surprise reflow.
+
+Changing modes, selecting an empty directory/day/filter, or moving through the
+calendar never consumes existing standalone note columns.
+
+## ⌨ Commands
 
 ```vim
 :SeijakuToggle
@@ -114,143 +251,75 @@ after changing Lua code: `:Lazy sync` does not unload modules already cached in
 :SeijakuToggleMode
 :SeijakuNew
 :SeijakuNewForCurrent
-:SeijakuNewForPath
-:SeijakuAttachPath
-:SeijakuDetachPath
-:SeijakuOpen
+:SeijakuNewForPath {path}
+:SeijakuAttachPath {note_id} {path}
+:SeijakuDetachPath {note_id} {path}
+:SeijakuOpen {note_id}
 :SeijakuList
 :SeijakuRebuildIndex
 ```
 
-Default keymap:
+Default global mappings:
 
-```txt
-Alt-o       Toggle Seijaku sidebar
-<leader>a   Create a note for the current buffer
+```text
+Alt-o       toggle the sidebar
+<leader>a  create a note for the current buffer or Oil entry
 ```
 
-## Sidebar
+Set either mapping to `false`, or use `keymaps.enable_default = false`, to
+disable the defaults.
 
-`:SeijakuToggle` opens the current notes sidebar in a real vertical split, using
-`directory` mode by default. The main window is resized together with the
-sidebar. Notes opened from the sidebar are treated as part of the sidebar
-session and close with it.
+## ⚙ Configuration
 
-Local sidebar mappings:
-
-```txt
-Enter  Open selected note in a horizontal split below the sidebar
-a      Create note for the current filesystem context
-x      Detach selected note from the current/contextual target
-n      Create global note
-r      Rename selected note
-dd     Delete selected note
-Tab    Cycle all/directory/calendar mode
-s      Cycle date/updated/created sorting in all mode
-R      Refresh
+```lua
+require("seijaku").setup({
+  vault_dir = "~/Notes/seijaku",
+  sidebar = {
+    width = "auto",                 -- bounded between 44 and 56
+    position = "right",
+    standalone_layout = "vertical", -- use another value to stay docked
+    default_mode = "directory",
+    default_all_sort = "date",
+    default_all_filter = "all",
+    all_mode_limit = 500,
+    debounce_ms = 150,
+  },
+  editor = {
+    open_cmd = "belowright split",
+    wrap = true,
+    linebreak = true,
+    breakindent = true,
+  },
+  keymaps = {
+    enable_default = true,
+    toggle = "<A-o>",
+    new_for_current = "<leader>a",
+  },
+  integrations = {
+    oil = true,
+    netrw = true,
+    telescope = true,
+  },
+})
 ```
 
-The sidebar uses an automatically sized vertical split. Its managed horizontal
-preview follows the selected note and uses a normal `belowright split`; Neovim
-distributes it naturally together with calendar and additional note windows.
-Pressing `Enter` opens an additional note split inside the sidebar column. If
-the preview is closed with `:q`, it is only recreated when a note is explicitly
-opened, created, or a new sidebar mode is selected.
+Wrapping is window-local and visual: long Markdown lines continue on screen
+without inserting newline characters or affecting Markdown buffers outside
+Seijaku.
 
-Automatic sidebar width is bounded between 44 and 56 columns. A fixed numeric
-width can still be set with `sidebar.width`.
+## □ Vault
 
-Note previews and editor splits use soft wrapping by default: long Markdown
-lines continue visually on the next screen line, preferably at word boundaries,
-without inserting newline characters into the file. These window-local options
-can be disabled with `editor.wrap = false` and do not affect Markdown buffers
-outside Seijaku.
-
-All existing filesystem files can be note targets regardless of their
-extension, including office and binary files. In an `oil.nvim` buffer, the item
-under the cursor is used only as the target for association actions. The
-`directory` view itself always follows Oil's open directory and includes notes
-from that directory and its descendants. The current directory is used as the
-association fallback when no item is selected.
-
-New notes include a compact generated header before the title with their
-creation time, last update time, associated targets, and explicit calendar date
-when scheduled. This visible header is kept in sync when the note is saved or
-its metadata changes; `index.json` remains the source of truth.
-
-If the main window is closed while the sidebar remains open, toggling the
-sidebar off replaces that last sidebar window with an empty normal buffer.
-
-The sidebar currently supports:
-
-- `all`: `date` groups notes by their effective calendar date (`calendar_date`,
-  falling back to `created_at`); `updated` sorts by the last content or metadata
-  update; `created` groups strictly by creation day. Press `s` to cycle them.
-  The first associated target is shown on the right with extra space reserved
-  for its filename or directory name.
-- `directory`: exact notes for file contexts; for directory contexts, a filtered
-  recursive tree containing annotated paths and the folders needed to reach them.
-- `calendar`: a monthly Gregorian calendar and a separate notes window for the
-  selected day. Notes without an explicit calendar date use their creation day.
-
-### Calendar
-
-Calendar mode uses two real Neovim windows in the sidebar column. The upper
-window renders any month from year 1 through 9999; the lower window lists notes
-for the selected day. Use normal `<C-w>j` and `<C-w>k` window navigation to move
-between them. The lower window starts directly with the notes, without a title
-or separator line.
-
-The first note for the selected day opens in the managed preview by default,
-and moving through the day-notes window updates that preview. A day without
-notes closes a clean preview; a manually closed preview stays closed. Every
-sidebar mode change resets panel cursors and scrolling to the first line and
-recreates the preview from the first available note in the destination mode.
-
-Calendar window mappings:
-
-```txt
-h/l or Left/Right  Previous/next day
-j/k or Down/Up     Next/previous week
-[/]                Previous/next month
-gg/G               First/last day of the month
-t                  Today
-Enter              Focus the notes window
-a                  Create contextual note for selected day
-n                  Create global note for selected day
-```
-
-Day-notes window mappings:
-
-```txt
-j/k    Navigate notes normally
-Enter  Open selected note
-a/n    Create contextual/global note for selected day
-x      Clear the selected note's explicit calendar date
-r      Rename selected note
-dd     Delete selected note after confirmation
-Tab    Cycle to the next sidebar mode
-R      Refresh calendar and day notes
-```
-
-Notes created from calendar mode store `calendar_date` in `index.json` and show
-it as `Date` in their generated Markdown header. Clearing it makes the note fall
-back to its creation day in the calendar.
-
-## Vault structure
-
-```txt
+```text
 ~/Notes/seijaku/
 ├── index.json
 ├── notes/
+│   └── YYYY/MM/DD/<note_id>.md
 └── backups/
+    ├── canonical/
+    └── snapshots/
 ```
 
-## Design
-
-- Notes are Markdown files.
-- Metadata lives in `index.json`.
-- Note IDs are independent from filesystem paths.
-- One path can have many notes.
-- One note can be attached to many paths.
-- Notes can exist without any target.
+- Notes are ordinary Markdown files.
+- IDs are independent from filesystem paths.
+- A note can target many paths; a path can have many notes.
+- Notes can remain global without any target.

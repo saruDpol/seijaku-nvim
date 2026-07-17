@@ -115,7 +115,7 @@ immediately; `Esc` cancels.
 | `1` | General | `·` | Current target or `Untitled` |
 | `2` | Diary | `◷` | `diary` |
 | `3` | Meeting | `○` | `meeting-<filename>` |
-| `4` | Description | `≡` | `desc_<filename>` |
+| `4` | Description | `≡` | `desc-<filename>` |
 
 General, diary, meeting and description rows use dark Japanese-inspired blue,
 gold, orange and Seijaku green. Existing notes without a stored type remain
@@ -257,6 +257,7 @@ calendar never consumes existing standalone note columns.
 :SeijakuOpen {note_id}
 :SeijakuList
 :SeijakuRebuildIndex
+:SeijakuReconcile
 ```
 
 Default global mappings:

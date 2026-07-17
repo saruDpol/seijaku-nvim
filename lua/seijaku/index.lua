@@ -6,6 +6,16 @@ local util = require("seijaku.util")
 
 local save_timer = nil
 
+local function stop_save_timer()
+  if save_timer then
+    save_timer:stop()
+    if not save_timer:is_closing() then
+      save_timer:close()
+    end
+    save_timer = nil
+  end
+end
+
 local function sync_note_metadata(note)
   local ok, notes = pcall(require, "seijaku.notes")
 
@@ -31,6 +41,96 @@ end
 
 local function decode_json(text)
   return vim.json.decode(text)
+end
+
+local function read_note_lines(abs_path)
+  if vim.fn.filereadable(abs_path) == 0 then
+    return nil
+  end
+
+  return vim.fn.readfile(abs_path)
+end
+
+local function parse_note_metadata(lines)
+  local metadata = {
+    targets = {},
+  }
+  local in_block = false
+
+  for _, line in ipairs(lines or {}) do
+    if line == "<!-- seijaku:metadata:start -->" then
+      in_block = true
+    elseif line == "<!-- seijaku:metadata:end -->" then
+      break
+    elseif in_block then
+      local note_type = line:match("^> Type:%s*`([^`]+)`")
+      if note_type then
+        metadata.note_type = note_type
+      end
+
+      local created_at = line:match("^> Created:%s*`([^`]+)`")
+      if created_at then
+        metadata.created_at = created_at
+      end
+
+      local updated_at = line:match("^> Updated:%s*`([^`]+)`")
+      if updated_at then
+        metadata.updated_at = updated_at
+      end
+
+      local target_path = line:match("^> Target:%s*`([^`]+)`")
+      if target_path and target_path ~= "global" then
+        table.insert(metadata.targets, {
+          path = target_path,
+          type = paths.target_type(target_path),
+        })
+      end
+
+      local calendar_date = line:match("^> Date:%s*`([^`]+)`")
+      if calendar_date then
+        metadata.calendar_date = calendar_date
+      end
+    end
+  end
+
+  for _, line in ipairs(lines or {}) do
+    local title = line:match("^#%s+(.+)$")
+    if title and title ~= "" then
+      metadata.title = title
+      break
+    end
+  end
+
+  return metadata
+end
+
+local function note_from_file(state, rel_path)
+  local abs_path = paths.join(state.vault_dir, rel_path)
+  local lines = read_note_lines(abs_path)
+
+  if not lines then
+    return nil
+  end
+
+  local metadata = parse_note_metadata(lines)
+  local basename = vim.fn.fnamemodify(rel_path, ":t:r")
+
+  return {
+    id = basename,
+    title = metadata.title or basename,
+    file = rel_path,
+    created_at = metadata.created_at or util.now(),
+    updated_at = metadata.updated_at or metadata.created_at or util.now(),
+    note_type = metadata.note_type or "general",
+    calendar_date = metadata.calendar_date,
+    targets = metadata.targets or {},
+    tags = {},
+  }
+end
+
+local function structural_save()
+  state_mod.mark_dirty()
+  M.save_sync()
 end
 
 function M.ensure_vault()
@@ -74,7 +174,7 @@ function M.rebuild_derived_indexes()
   local index = state.index or empty_index()
 
   index.notes = index.notes or {}
-  index.targets = index.targets or {}
+  index.targets = {}
   index.target_dirs = {}
 
   state.notes_by_id = index.notes
@@ -88,6 +188,17 @@ function M.rebuild_derived_indexes()
 
       if abs_note_path then
         state.notes_by_file[abs_note_path] = note
+      end
+    end
+
+    for _, target in ipairs(note.targets or {}) do
+      local target_path = paths.normalize(target.path)
+
+      if target_path then
+        index.targets[target_path] = index.targets[target_path] or {}
+        table.insert(index.targets[target_path], note.id)
+        target.path = target_path
+        target.type = target.type or paths.target_type(target_path)
       end
     end
   end
@@ -147,6 +258,7 @@ local function write_index_sync()
 end
 
 function M.save_sync()
+  stop_save_timer()
   write_index_sync()
 end
 
@@ -154,13 +266,7 @@ function M.schedule_save()
   local state = state_mod.get()
   local delay = state.config.index.save_debounce_ms or 500
 
-  if save_timer then
-    save_timer:stop()
-    if not save_timer:is_closing() then
-      save_timer:close()
-    end
-    save_timer = nil
-  end
+  stop_save_timer()
 
   local timer = vim.loop.new_timer()
   save_timer = timer
@@ -185,7 +291,12 @@ function M.mark_dirty()
   M.schedule_save()
 end
 
-function M.add_note(note)
+function M.mark_dirty_sync()
+  structural_save()
+end
+
+function M.add_note(note, opts)
+  opts = opts or {}
   local state = state_mod.get()
   local index = state.index
 
@@ -200,7 +311,11 @@ function M.add_note(note)
     end
   end
 
-  M.mark_dirty()
+  if opts.defer_save then
+    state_mod.mark_dirty()
+  else
+    structural_save()
+  end
 end
 
 function M.get_note(note_id)
@@ -285,6 +400,7 @@ function M.get_calendar_counts(year, month)
 end
 
 function M.set_calendar_date(note_id, date)
+  local state = state_mod.get()
   local note = M.get_note(note_id)
 
   if not note then
@@ -297,13 +413,17 @@ function M.set_calendar_date(note_id, date)
 
   note.calendar_date = date
   note.updated_at = util.now()
-  M.mark_dirty()
+  if state.index and state.index.notes then
+    state.index.notes[note_id] = note
+  end
+  structural_save()
   sync_note_metadata(note)
 
   return true
 end
 
-function M.attach(note_id, target_path, target_type)
+function M.attach(note_id, target_path, target_type, opts)
+  opts = opts or {}
   local state = state_mod.get()
   local index = state.index
   local note = index.notes[note_id]
@@ -349,13 +469,18 @@ function M.attach(note_id, target_path, target_type)
   note.updated_at = util.now()
 
   M.rebuild_derived_indexes()
-  M.mark_dirty()
+  if opts.defer_save then
+    state_mod.mark_dirty()
+  else
+    structural_save()
+  end
   sync_note_metadata(note)
 
   return true
 end
 
-function M.detach(note_id, target_path)
+function M.detach(note_id, target_path, opts)
+  opts = opts or {}
   local state = state_mod.get()
   local index = state.index
   local note = index.notes[note_id]
@@ -394,13 +519,18 @@ function M.detach(note_id, target_path)
   note.updated_at = util.now()
 
   M.rebuild_derived_indexes()
-  M.mark_dirty()
+  if opts.defer_save then
+    state_mod.mark_dirty()
+  else
+    structural_save()
+  end
   sync_note_metadata(note)
 
   return true
 end
 
-function M.delete_note(note_id)
+function M.delete_note(note_id, opts)
+  opts = opts or {}
   local state = state_mod.get()
   local index = state.index
   local note = index.notes[note_id]
@@ -429,9 +559,72 @@ function M.delete_note(note_id)
   index.notes[note_id] = nil
 
   M.rebuild_derived_indexes()
-  M.mark_dirty()
+  if opts.defer_save then
+    state_mod.mark_dirty()
+  else
+    structural_save()
+  end
 
   return true
+end
+
+function M.reconcile_vault()
+  local state = state_mod.get()
+  local notes_dir = paths.join(state.vault_dir, "notes")
+  local seen_files = {}
+  local imported = 0
+  local removed = 0
+
+  local function walk(dir)
+    local handle = vim.loop.fs_scandir(dir)
+    if not handle then
+      return
+    end
+
+    while true do
+      local name, kind = vim.loop.fs_scandir_next(handle)
+      if not name then
+        break
+      end
+
+      local abs_path = paths.join(dir, name)
+
+      if kind == "directory" then
+        walk(abs_path)
+      elseif kind == "file" and name:sub(-3) == ".md" then
+        local rel_path = paths.relative_to(state.vault_dir, abs_path)
+        if rel_path then
+          seen_files[rel_path] = true
+          local note = note_from_file(state, rel_path)
+
+          if note and not state.index.notes[note.id] then
+            state.index.notes[note.id] = note
+            imported = imported + 1
+          end
+        end
+      end
+    end
+  end
+
+  walk(notes_dir)
+
+  for note_id, note in pairs(state.index.notes or {}) do
+    if note.file and not seen_files[note.file] then
+      state.index.notes[note_id] = nil
+      removed = removed + 1
+    end
+  end
+
+  M.rebuild_derived_indexes()
+
+  if imported > 0 or removed > 0 then
+    structural_save()
+  end
+
+  return {
+    imported = imported,
+    removed = removed,
+  }
 end
 
 function M.get_notes_for_target(target_path)

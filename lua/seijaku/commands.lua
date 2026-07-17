@@ -111,6 +111,18 @@ function M.setup()
     vim.notify("seijaku: index rebuilt")
   end, {})
 
+  vim.api.nvim_create_user_command("SeijakuReconcile", function()
+    local result = require("seijaku.index").reconcile_vault()
+    require("seijaku.sidebar").refresh()
+    vim.notify(
+      string.format(
+        "seijaku: reconcile complete (%d imported, %d removed)",
+        result.imported,
+        result.removed
+      )
+    )
+  end, {})
+
   vim.api.nvim_create_user_command("SeijakuList", function()
     local notes = require("seijaku.index").list_notes()
 

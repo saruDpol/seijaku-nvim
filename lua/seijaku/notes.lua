@@ -107,7 +107,7 @@ local function default_title_for_type(note_type, opts)
   end
 
   if note_type == "desc" then
-    return "desc_" .. (associated_file or "")
+    return "desc-" .. (associated_file or "")
   end
 
   return opts.title or "Untitled"
@@ -240,18 +240,20 @@ function M.create(opts)
         tags = {},
       }
 
-      index.add_note(note)
-
-      if opts.target_path then
-        index.attach(note_id, opts.target_path, opts.target_type)
-      end
-
       local initial_lines = {}
       vim.list_extend(initial_lines, metadata_lines(note))
       table.insert(initial_lines, "")
       table.insert(initial_lines, "# " .. title)
       table.insert(initial_lines, "")
       util.write_file(abs_path, initial_lines)
+
+      index.add_note(note, { defer_save = true })
+
+      if opts.target_path then
+        index.attach(note_id, opts.target_path, opts.target_type, { defer_save = true })
+      end
+
+      index.save_sync()
 
       if opts.open ~= false then
         local sidebar_ok, sidebar = pcall(require, "seijaku.sidebar")
@@ -340,7 +342,7 @@ function M.rename(note_id, new_title)
   note.title = new_title
   note.updated_at = util.now()
 
-  index.mark_dirty()
+  index.mark_dirty_sync()
   M.sync_metadata(note)
   refresh_sidebar()
 

@@ -3,6 +3,7 @@ local M = {}
 local state_mod = require("seijaku.state")
 local index = require("seijaku.index")
 local notes = require("seijaku.notes")
+local todos = require("seijaku.todos")
 local context = require("seijaku.context")
 local paths = require("seijaku.paths")
 local calendar = require("seijaku.calendar")
@@ -215,6 +216,8 @@ local function add_header(lines, line_items, title)
 	local right = "seijaku"
 	if mode == "all" then
 		right = string.format("sort %s | filter %s", sidebar_state().all_sort, sidebar_state().all_filter)
+	elseif mode == "todo" then
+		right = "filter " .. tostring(sidebar_state().todo_filter or "all")
 	elseif mode == "calendar" then
 		right = "[/] month  t today"
 	end
@@ -223,31 +226,44 @@ local function add_header(lines, line_items, title)
 	local mode_labels = {
 		mode == "all" and sidebar_state().all_sort or "all",
 		mode == "directory" and tostring(title or ".") or "dir",
+		"todo",
 		"cal",
 	}
-	local active_index = mode == "all" and 1 or mode == "directory" and 2 or 3
+	local active_index = mode == "all" and 1 or mode == "directory" and 2 or mode == "todo" and 3 or 4
+	local inactive_width = 0
+	for index_in_list, label in ipairs(mode_labels) do
+		if index_in_list ~= active_index then
+			inactive_width = inactive_width + display_width(label)
+		end
+	end
 	local available_active = math.max(
 		3,
-		width
-			- display_width(mode_labels[active_index == 1 and 2 or 1])
-			- display_width(mode_labels[active_index == 3 and 2 or 3])
-			- 2
+		width - inactive_width - (#mode_labels - 1)
 	)
 	mode_labels[active_index] = truncate_left(mode_labels[active_index], available_active)
-	local mode_space = math.max(
-		2,
-		width - display_width(mode_labels[1]) - display_width(mode_labels[2]) - display_width(mode_labels[3])
-	)
-	local mode_gap_left = math.floor(mode_space / 2)
-	local mode_gap_right = mode_space - mode_gap_left
-	local mode_text = mode_labels[1]
-		.. string.rep(" ", mode_gap_left)
-		.. mode_labels[2]
-		.. string.rep(" ", mode_gap_right)
-		.. mode_labels[3]
-	local active_start = active_index == 1 and 0
-		or active_index == 2 and #mode_labels[1] + mode_gap_left
-		or #mode_text - #mode_labels[3]
+	local labels_width = 0
+	for _, label in ipairs(mode_labels) do
+		labels_width = labels_width + display_width(label)
+	end
+	local mode_space = math.max(#mode_labels - 1, width - labels_width)
+	local base_gap = math.floor(mode_space / (#mode_labels - 1))
+	local extra = mode_space % (#mode_labels - 1)
+	local parts = {}
+	local active_start = 0
+	local byte_length = 0
+	for index_in_list, label in ipairs(mode_labels) do
+		if index_in_list == active_index then
+			active_start = byte_length
+		end
+		table.insert(parts, label)
+		byte_length = byte_length + #label
+		if index_in_list < #mode_labels then
+			local gap = base_gap + (index_in_list <= extra and 1 or 0)
+			table.insert(parts, string.rep(" ", gap))
+			byte_length = byte_length + gap
+		end
+	end
+	local mode_text = table.concat(parts)
 
 	table.insert(lines, left .. string.rep(" ", gap) .. right)
 	table.insert(lines, rule)
@@ -286,6 +302,7 @@ local function apply_highlights(buf, lines, line_items)
 	vim.api.nvim_set_hl(0, "SeijakuHelp", { link = "Comment" })
 	vim.api.nvim_set_hl(0, "SeijakuSection", { link = "Title" })
 	vim.api.nvim_set_hl(0, "SeijakuTarget", { link = "Comment" })
+	vim.api.nvim_set_hl(0, "SeijakuMissingTarget", { link = "DiagnosticWarn" })
 	vim.api.nvim_set_hl(0, "SeijakuNote", { link = "Function" })
 	vim.api.nvim_set_hl(0, "SeijakuNoteGeneral", { fg = "#286b8c", ctermfg = 24 })
 	vim.api.nvim_set_hl(0, "SeijakuNoteDiary", { fg = "#a67c00", ctermfg = 136 })
@@ -295,6 +312,9 @@ local function apply_highlights(buf, lines, line_items)
 	vim.api.nvim_set_hl(0, "SeijakuCalendarToday", { link = "DiagnosticInfo" })
 	vim.api.nvim_set_hl(0, "SeijakuCalendarSelected", { fg = "#9f3434", ctermfg = 217, bold = true })
 	vim.api.nvim_set_hl(0, "SeijakuCalendarHasNotes", { link = "Function" })
+	vim.api.nvim_set_hl(0, "SeijakuTodoOpen", { fg = "#c05f7e", ctermfg = 168 })
+	vim.api.nvim_set_hl(0, "SeijakuTodoClosed", { fg = "#66645f", ctermfg = 242 })
+	vim.api.nvim_set_hl(0, "SeijakuTodoStrike", { fg = "#66645f", ctermfg = 242, strikethrough = true })
 
 	local highlight_by_kind = {
 		subheader = "SeijakuSubheader",
@@ -310,6 +330,9 @@ local function apply_highlights(buf, lines, line_items)
 
 	for line, item in pairs(line_items or {}) do
 		local group = item and highlight_by_kind[item.kind]
+		if item and item.missing_target then
+			group = "SeijakuMissingTarget"
+		end
 
 		if group then
 			vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, 0, {
@@ -357,10 +380,27 @@ local function apply_highlights(buf, lines, line_items)
 			})
 		end
 
+		if item and item.kind == "todo" then
+			vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, 0, {
+				end_col = #lines[line],
+				hl_group = item.completed and "SeijakuTodoClosed" or "SeijakuTodoOpen",
+				hl_mode = "replace",
+				priority = 100,
+			})
+			if item.completed and item.text_end and item.text_end > 0 then
+				vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, 0, {
+					end_col = item.text_end,
+					hl_group = "SeijakuTodoStrike",
+					hl_mode = "replace",
+					priority = 110,
+				})
+			end
+		end
+
 		if item and item.kind == "note" and item.target_start then
 			vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, item.target_start, {
 				end_col = item.target_end,
-				hl_group = "SeijakuTarget",
+				hl_group = item.missing_target and "SeijakuMissingTarget" or "SeijakuTarget",
 				hl_mode = "replace",
 				priority = 110,
 			})
@@ -414,6 +454,10 @@ local function all_note_line(note)
 	end
 
 	local right = paths.basename(first_target.path)
+	local missing_target = not paths.exists(first_target.path)
+	if missing_target then
+		right = "! " .. right
+	end
 	right = truncate_left(right, math.max(8, width - 18))
 	local left_width = math.max(12, width - display_width(right) - 1)
 	left = truncate_right(left, left_width)
@@ -421,7 +465,7 @@ local function all_note_line(note)
 	local line = left .. string.rep(" ", gap) .. right
 	local target_start = #left + gap
 
-	return line, target_start, target_start + #right
+	return line, target_start, target_start + #right, missing_target
 end
 
 local function path_icon(target_path, target_type)
@@ -446,8 +490,12 @@ local function target_label(target_path)
 	local target_type = paths.target_type(target_path)
 	local width = math.max(8, sidebar_width() - 2)
 	local label = truncate_left(target_name(target_path), width)
+	local missing = not paths.exists(target_path)
 
-	return path_icon(target_path, target_type) .. " " .. label
+	if missing then
+		return "! " .. label, true
+	end
+	return path_icon(target_path, target_type) .. " " .. label, false
 end
 
 function M.render_all()
@@ -509,7 +557,7 @@ function M.render_all()
 				end
 			end
 
-			local line, target_start, target_end = all_note_line(note)
+			local line, target_start, target_end, missing_target = all_note_line(note)
 			table.insert(lines, line)
 			line_items[#lines] = {
 				kind = "note",
@@ -517,6 +565,124 @@ function M.render_all()
 				note_type = note_type(note),
 				target_start = target_start,
 				target_end = target_end,
+				missing_target = missing_target,
+			}
+		end
+	end
+
+	return lines, line_items
+end
+
+local function split_word_by_width(word, width)
+	local chunks = {}
+	local current = ""
+	for char_index = 0, vim.fn.strchars(word) - 1 do
+		local char = vim.fn.strcharpart(word, char_index, 1)
+		if current ~= "" and display_width(current .. char) > width then
+			table.insert(chunks, current)
+			current = char
+		else
+			current = current .. char
+		end
+	end
+	if current ~= "" then
+		table.insert(chunks, current)
+	end
+	return chunks
+end
+
+local function wrap_text(text, width)
+	width = math.max(1, width)
+	local result = {}
+	local current = ""
+	for word in tostring(text or ""):gmatch("%S+") do
+		local pieces = display_width(word) > width and split_word_by_width(word, width) or { word }
+		for _, piece in ipairs(pieces) do
+			local candidate = current == "" and piece or (current .. " " .. piece)
+			if current ~= "" and display_width(candidate) > width then
+				table.insert(result, current)
+				current = piece
+			else
+				current = candidate
+			end
+		end
+	end
+	if current ~= "" then
+		table.insert(result, current)
+	end
+	return #result > 0 and result or { "" }
+end
+
+local function todo_lines(todo)
+	local width = sidebar_width()
+	local timestamp = todo.completed_at or todo.created_at
+	local date = tostring(timestamp or ""):match("^(%d%d%d%d%-%d%d%-%d%d)") or "unknown"
+	local metadata = (todo.completed_at and "closed " or "created ") .. date
+	local icon = todo.completed_at and "■" or "□"
+	local prefix = "   " .. icon .. " "
+	local indent = string.rep(" ", display_width(prefix))
+	local chunks = wrap_text(todo.text, math.max(1, width - display_width(prefix)))
+	local result = {}
+
+	for chunk_index, chunk in ipairs(chunks) do
+		local base = (chunk_index == 1 and prefix or indent) .. chunk
+		table.insert(result, {
+			text = base,
+			text_end = #base,
+		})
+	end
+
+	local last = result[#result]
+	local gap = width - display_width(last.text) - display_width(metadata)
+	if gap >= 1 then
+		last.text = last.text .. string.rep(" ", gap) .. metadata
+	else
+		table.insert(result, {
+			text = string.rep(" ", math.max(0, width - display_width(metadata))) .. metadata,
+			text_end = nil,
+		})
+	end
+
+	return result
+end
+
+function M.render_todos()
+	local lines = {}
+	local line_items = {}
+	local all_todos = index.list_todos()
+	local filter = sidebar_state().todo_filter
+	if filter ~= "open" and filter ~= "closed" then
+		filter = "all"
+	end
+	sidebar_state().todo_filter = filter
+	if filter ~= "all" then
+		all_todos = vim.tbl_filter(function(todo)
+			return filter == "closed" and todo.completed_at ~= nil or filter == "open" and todo.completed_at == nil
+		end, all_todos)
+	end
+	local current_date = nil
+
+	add_header(lines, line_items, "todo")
+	if #all_todos == 0 then
+		table.insert(lines, filter == "all" and "No todos yet" or ("No " .. filter .. " todos"))
+		line_items[#lines] = { kind = "help" }
+		return lines, line_items
+	end
+
+	for _, todo in ipairs(all_todos) do
+		local date = index.todo_date(todo) or "Unknown date"
+		if date ~= current_date then
+			current_date = date
+			table.insert(lines, " " .. date)
+			line_items[#lines] = { kind = "date" }
+		end
+		for _, rendered in ipairs(todo_lines(todo)) do
+			table.insert(lines, rendered.text)
+			line_items[#lines] = {
+				kind = "todo",
+				todo_id = todo.id,
+				completed = todo.completed_at ~= nil,
+				text_end = rendered.text_end,
 			}
 		end
 	end
@@ -569,10 +735,12 @@ function M.render_directory()
 			local target_indent = " " .. string.rep("  ", depth)
 
 			shown = shown + 1
-			table.insert(lines, target_indent .. target_label(target_path))
+			local label, missing_target = target_label(target_path)
+			table.insert(lines, target_indent .. label)
 			line_items[#lines] = {
 				kind = "target",
 				target_path = target_path,
+				missing_target = missing_target,
 			}
 
 			table.sort(target_notes, function(a, b)
@@ -649,10 +817,12 @@ function M.render_directory()
 			for _, name in ipairs(names) do
 				local child = node.children[name]
 				local indent = " " .. string.rep("  ", depth)
-				table.insert(lines, indent .. target_label(child.path))
+				local label, missing_target = target_label(child.path)
+				table.insert(lines, indent .. label)
 				line_items[#lines] = {
 					kind = child.target_path and "target" or "folder",
 					target_path = child.target_path,
+					missing_target = missing_target,
 				}
 
 				if child.target_path then
@@ -996,7 +1166,9 @@ function M.render_calendar()
 
 	local first_weekday = calendar.weekday(selected.year, selected.month, 1)
 	local days = calendar.days_in_month(selected.year, selected.month)
-	local weeks = math.ceil((first_weekday - 1 + days) / 7)
+	-- Always render the maximum Gregorian month footprint. Shorter months keep
+	-- their trailing cells empty so changing month never resizes the panel.
+	local weeks = 6
 
 	for week = 1, weeks do
 		local line = string.rep(" ", margin)
@@ -1039,15 +1211,16 @@ function M.render_calendar_notes()
 	local sidebar = sidebar_state()
 	local date = sidebar.calendar_date
 	local day_notes = index.get_notes_for_calendar_date(date)
+	local day_todos = index.get_todos_for_calendar_date(date)
 	local lines = {}
 	local line_items = {}
 
-	if #day_notes == 0 then
-		table.insert(lines, "No notes for this day")
+	if #day_notes == 0 and #day_todos == 0 then
+		table.insert(lines, "No items for this day")
 		line_items[#lines] = { kind = "help" }
 	else
 		for _, note in ipairs(day_notes) do
-			local line, target_start, target_end = all_note_line(note)
+			local line, target_start, target_end, missing_target = all_note_line(note)
 			table.insert(lines, line)
 			line_items[#lines] = {
 				kind = "note",
@@ -1055,7 +1228,19 @@ function M.render_calendar_notes()
 				note_type = note_type(note),
 				target_start = target_start,
 				target_end = target_end,
+				missing_target = missing_target,
 			}
+		end
+		for _, todo in ipairs(day_todos) do
+			for _, rendered in ipairs(todo_lines(todo)) do
+				table.insert(lines, rendered.text)
+				line_items[#lines] = {
+					kind = "todo",
+					todo_id = todo.id,
+					completed = todo.completed_at ~= nil,
+					text_end = rendered.text_end,
+				}
+			end
 		end
 	end
 
@@ -1079,22 +1264,15 @@ function M.set_mode(mode)
 	if mode == "agenda" then
 		mode = "calendar"
 	end
-	if mode ~= "all" and mode ~= "directory" and mode ~= "calendar" then
+	if mode ~= "all" and mode ~= "directory" and mode ~= "todo" and mode ~= "calendar" then
 		return false
 	end
 
 	local sidebar = sidebar_state()
-	local previous_mode = sidebar.mode
 	if mode == "calendar" then
-		if not standalone_vertical() then
-			close_preview_window()
-		end
 		sidebar.mode = mode
 		ensure_calendar_notes_window()
 	else
-		if previous_mode == "calendar" and not standalone_vertical() then
-			close_preview_window()
-		end
 		close_calendar_notes_window()
 		sidebar.mode = mode
 	end
@@ -1112,6 +1290,8 @@ function M.toggle_mode()
 	if sidebar.mode == "all" then
 		M.set_mode("directory")
 	elseif sidebar.mode == "directory" then
+		M.set_mode("todo")
+	elseif sidebar.mode == "todo" then
 		M.set_mode("calendar")
 	else
 		M.set_mode("all")
@@ -1136,6 +1316,13 @@ end
 
 function M.toggle_all_filter()
 	local sidebar = sidebar_state()
+	if sidebar.mode == "todo" then
+		local filters = { "all", "open", "closed" }
+		local current = vim.fn.index(filters, sidebar.todo_filter)
+		sidebar.todo_filter = filters[((current + 1) % #filters) + 1]
+		M.refresh()
+		return
+	end
 	if sidebar.mode ~= "all" then
 		return
 	end
@@ -1155,9 +1342,16 @@ function M.refresh()
 	end
 
 	local lines, line_items
+	local selected_todo_id = nil
+	if sidebar.mode == "todo" then
+		local selected = selected_item()
+		selected_todo_id = selected and selected.kind == "todo" and selected.todo_id or nil
+	end
 
 	if sidebar.mode == "directory" then
 		lines, line_items = M.render_directory()
+	elseif sidebar.mode == "todo" then
+		lines, line_items = M.render_todos()
 	elseif sidebar.mode == "calendar" then
 		ensure_calendar_notes_window()
 		lines, line_items = M.render_calendar()
@@ -1174,16 +1368,28 @@ function M.refresh()
 
 	apply_highlights()
 
+	if selected_todo_id and sidebar.mode == "todo" and is_valid_win(sidebar.win) then
+		for line, item in ipairs(line_items) do
+			if item.kind == "todo" and item.todo_id == selected_todo_id then
+				pcall(vim.api.nvim_win_set_cursor, sidebar.win, { line, 0 })
+				break
+			end
+		end
+	end
+
 	if sidebar.mode == "calendar" and is_valid_win(sidebar.win) then
-		-- Calendar height follows its rendered content (five- and six-week months
-		-- differ) and remains protected when the day list or preview is split.
+		-- The calendar uses a fixed six-week grid and remains protected when the
+		-- day list or preview is split.
 		pcall(vim.api.nvim_win_set_height, sidebar.win, math.max(1, #lines))
 		vim.wo[sidebar.win].winfixheight = true
 	end
 
 	if sidebar.mode == "calendar" and is_valid_buf(sidebar.calendar_notes_buf) then
 		local selected = selected_calendar_note_item()
-		local selected_note_id = selected and selected.kind == "note" and selected.note_id or nil
+		local selected_kind = selected and selected.kind or nil
+		local selected_id = selected_kind == "note" and selected.note_id
+			or selected_kind == "todo" and selected.todo_id
+			or nil
 		local note_lines, note_items = M.render_calendar_notes()
 		sidebar.calendar_notes_lines = note_lines
 		sidebar.calendar_notes_items = note_items
@@ -1196,7 +1402,8 @@ function M.refresh()
 		if is_valid_win(sidebar.calendar_notes_win) then
 			local selected_line = nil
 			for line, item in ipairs(note_items) do
-				if item.kind == "note" and item.note_id == selected_note_id then
+				local item_id = item.kind == "note" and item.note_id or item.kind == "todo" and item.todo_id or nil
+				if item.kind == selected_kind and item_id == selected_id then
 					selected_line = line
 					break
 				end
@@ -1204,7 +1411,7 @@ function M.refresh()
 
 			if not selected_line then
 				for line, item in ipairs(note_items) do
-					if item.kind == "note" then
+					if item.kind == "note" or item.kind == "todo" then
 						selected_line = line
 						break
 					end
@@ -1463,6 +1670,9 @@ end
 function M.sync_calendar_preview(force)
 	local sidebar = sidebar_state()
 	local selected = selected_calendar_note_item()
+	if selected and selected.kind == "todo" then
+		return
+	end
 	local preview_note = selected and selected.kind == "note" and selected or nil
 
 	if not preview_note then
@@ -1492,6 +1702,10 @@ end
 
 function M.sync_mode_preview(force)
 	local sidebar = sidebar_state()
+
+	if sidebar.mode == "todo" then
+		return
+	end
 
 	if sidebar.mode == "calendar" then
 		M.sync_calendar_preview(force)
@@ -1556,7 +1770,7 @@ function M.handle_enter()
 			vim.api.nvim_set_current_win(sidebar.calendar_notes_win)
 			for line = 1, #(sidebar.calendar_notes_lines or {}) do
 				local item = sidebar.calendar_notes_items[line]
-				if item and item.kind == "note" then
+				if item and (item.kind == "note" or item.kind == "todo") then
 					vim.api.nvim_win_set_cursor(sidebar.calendar_notes_win, { line, 0 })
 					break
 				end
@@ -1566,6 +1780,15 @@ function M.handle_enter()
 	end
 
 	local item = selected_item()
+	if item and item.kind == "todo" then
+		local ok, err = todos.toggle(item.todo_id)
+		if not ok then
+			vim.notify("seijaku: " .. tostring(err or "failed to toggle todo"), vim.log.levels.ERROR)
+			return
+		end
+		M.refresh()
+		return
+	end
 
 	if item and item.kind == "note" then
 		if not is_valid_win(sidebar.preview_win) then
@@ -1591,6 +1814,10 @@ function M.handle_enter()
 end
 
 function M.handle_create()
+	if sidebar_state().mode == "todo" then
+		todos.create({ on_created = M.refresh })
+		return
+	end
 	notes.create({
 		title = "Untitled",
 		calendar_date = sidebar_state().mode == "calendar" and sidebar_state().calendar_date or nil,
@@ -1600,7 +1827,21 @@ function M.handle_create()
 	})
 end
 
+function M.handle_create_todo_for_calendar()
+	if sidebar_state().mode ~= "calendar" then
+		return
+	end
+	todos.create({
+		calendar_date = sidebar_state().calendar_date,
+		on_created = M.refresh,
+	})
+end
+
 function M.handle_create_for_context()
+	if sidebar_state().mode == "todo" then
+		M.handle_create()
+		return
+	end
 	local ctx = context.get_association_target()
 
 	if not ctx or not ctx.target_path then
@@ -1620,7 +1861,13 @@ function M.handle_create_for_context()
 end
 
 local function rename_item(item)
-	if not item or item.kind ~= "note" then
+	if not item then
+		return
+	end
+	if item.kind == "todo" then
+		return todos.rename(item.todo_id)
+	end
+	if item.kind ~= "note" then
 		return
 	end
 
@@ -1651,7 +1898,25 @@ function M.handle_calendar_rename()
 end
 
 local function delete_item(item)
-	if not item or item.kind ~= "note" then
+	if not item then
+		return
+	end
+	if item.kind == "todo" then
+		local todo = index.get_todo(item.todo_id)
+		local text = todo and todo.text or item.todo_id
+		local choice = vim.fn.confirm("Delete todo '" .. text .. "'?", "&Yes\n&No", 2)
+		if choice ~= 1 then
+			return
+		end
+		local ok, err = todos.delete(item.todo_id)
+		if not ok then
+			vim.notify("seijaku: " .. tostring(err or "failed to delete todo"), vim.log.levels.ERROR)
+			return
+		end
+		M.refresh()
+		return
+	end
+	if item.kind ~= "note" then
 		return
 	end
 
@@ -1699,6 +1964,10 @@ function M.handle_detach_current()
 	M.refresh()
 end
 
+function M.handle_live_grep()
+	require("seijaku.search").live_grep()
+end
+
 function M.calendar_move_days(amount)
 	local sidebar = sidebar_state()
 	local selected = calendar.parse(sidebar.calendar_date) or calendar.today()
@@ -1731,6 +2000,16 @@ end
 
 function M.handle_calendar_note_enter()
 	local item = selected_calendar_note_item()
+
+	if item and item.kind == "todo" then
+		local ok, err = todos.toggle(item.todo_id)
+		if not ok then
+			vim.notify("seijaku: " .. tostring(err or "failed to toggle todo"), vim.log.levels.ERROR)
+			return
+		end
+		M.refresh()
+		return
+	end
 
 	if item and item.kind == "note" then
 		M.open_preview(item.note_id, { force = true, focus = true })
@@ -1772,6 +2051,7 @@ function M.setup_calendar_notes_mappings(buf)
 	vim.keymap.set("n", "<CR>", M.handle_calendar_note_enter, opts)
 	vim.keymap.set("n", "a", M.handle_create_for_context, opts)
 	vim.keymap.set("n", "n", M.handle_create, opts)
+	vim.keymap.set("n", "T", M.handle_create_todo_for_calendar, opts)
 	vim.keymap.set("n", "x", M.handle_calendar_clear_date, opts)
 	vim.keymap.set("n", "r", M.handle_calendar_rename, opts)
 	vim.keymap.set("n", "dd", M.handle_calendar_delete, opts)
@@ -1795,6 +2075,7 @@ function M.setup_mappings(buf)
 
 	vim.keymap.set("n", "<CR>", M.handle_enter, opts)
 	vim.keymap.set("n", "n", M.handle_create, opts)
+	vim.keymap.set("n", "T", M.handle_create_todo_for_calendar, opts)
 	vim.keymap.set("n", "a", M.handle_create_for_context, opts)
 	vim.keymap.set("n", "x", M.handle_detach_current, opts)
 	vim.keymap.set("n", "r", M.handle_rename, opts)
@@ -1802,6 +2083,7 @@ function M.setup_mappings(buf)
 	vim.keymap.set("n", "<Tab>", M.toggle_mode, opts)
 	vim.keymap.set("n", "s", M.toggle_all_sort, opts)
 	vim.keymap.set("n", "f", M.toggle_all_filter, opts)
+	vim.keymap.set("n", "/", M.handle_live_grep, opts)
 	vim.keymap.set("n", "R", M.refresh, opts)
 	vim.keymap.set("n", "h", function()
 		calendar_or_normal(function()

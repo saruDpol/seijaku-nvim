@@ -342,7 +342,7 @@ function M.rename(note_id, new_title)
   note.title = new_title
   note.updated_at = util.now()
 
-  index.mark_dirty_sync()
+  index.mark_dirty_sync(note)
   M.sync_metadata(note)
   refresh_sidebar()
 

@@ -7,9 +7,10 @@ local defaults = {
     width = "auto",
     position = "right",
     standalone_layout = "vertical",
-    default_mode = "directory",
+    default_mode = "all",
     default_all_sort = "date",
     default_all_filter = "all",
+    default_todo_filter = "all",
     all_mode_limit = 500,
     debounce_ms = 150,
   },
@@ -29,6 +30,10 @@ local defaults = {
 
   index = {
     save_debounce_ms = 500,
+    reload_debounce_ms = 120,
+    lock_timeout_ms = 2000,
+    stale_lock_ms = 10000,
+    watch_external_changes = true,
   },
 
   integrations = {

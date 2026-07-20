@@ -25,12 +25,20 @@ function M.setup()
     require("seijaku").mode_calendar()
   end, {})
 
+  vim.api.nvim_create_user_command("SeijakuModeTodo", function()
+    require("seijaku").mode_todo()
+  end, {})
+
   vim.api.nvim_create_user_command("SeijakuToggleMode", function()
     require("seijaku").toggle_mode()
   end, {})
 
   vim.api.nvim_create_user_command("SeijakuNew", function()
     require("seijaku").new_note()
+  end, {})
+
+  vim.api.nvim_create_user_command("SeijakuTodo", function()
+    require("seijaku").new_todo()
   end, {})
 
   vim.api.nvim_create_user_command("SeijakuNewForCurrent", function()
@@ -107,20 +115,33 @@ function M.setup()
 
   vim.api.nvim_create_user_command("SeijakuRebuildIndex", function()
     require("seijaku.index").rebuild_derived_indexes()
-    require("seijaku.index").save_sync()
+    require("seijaku.index").save_sync({ force = true })
     vim.notify("seijaku: index rebuilt")
   end, {})
 
   vim.api.nvim_create_user_command("SeijakuReconcile", function()
     local result = require("seijaku.index").reconcile_vault()
     require("seijaku.sidebar").refresh()
+    local conflict_count = #(result.conflicts or {})
     vim.notify(
       string.format(
-        "seijaku: reconcile complete (%d imported, %d removed)",
+        "seijaku: reconcile complete (%d imported, %d removed, %d conflicts)",
         result.imported,
-        result.removed
+        result.removed,
+        conflict_count
       )
     )
+
+    if conflict_count > 0 then
+      local details = {}
+      for _, conflict in ipairs(result.conflicts) do
+        table.insert(details, string.format("%s:\n  %s", conflict.id, table.concat(conflict.files, "\n  ")))
+      end
+      vim.notify(
+        "seijaku: duplicate note IDs were left unchanged\n" .. table.concat(details, "\n"),
+        vim.log.levels.WARN
+      )
+    end
   end, {})
 
   vim.api.nvim_create_user_command("SeijakuList", function()
@@ -129,6 +150,10 @@ function M.setup()
     for _, note in ipairs(notes) do
       print(note.id .. "  " .. note.title)
     end
+  end, {})
+
+  vim.api.nvim_create_user_command("SeijakuGrep", function()
+    require("seijaku").live_grep()
   end, {})
 end
 

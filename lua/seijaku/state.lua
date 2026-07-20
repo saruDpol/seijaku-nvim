@@ -13,6 +13,7 @@ local state = {
   index = nil,
 
   notes_by_id = {},
+  todos_by_id = {},
   notes_by_file = {},
   note_ids_by_target = {},
   target_paths_by_dir = {},
@@ -34,6 +35,7 @@ local state = {
     mode = "all",
     all_sort = "date",
     all_filter = "all",
+    todo_filter = "all",
     layout_mode = "docked",
     standalone_host_win = nil,
     current_dir = nil,
@@ -64,8 +66,15 @@ function M.setup(config)
   if state.sidebar.mode == "agenda" then
     state.sidebar.mode = "calendar"
   end
+  if state.sidebar.mode ~= "all"
+      and state.sidebar.mode ~= "directory"
+      and state.sidebar.mode ~= "todo"
+      and state.sidebar.mode ~= "calendar" then
+    state.sidebar.mode = "directory"
+  end
   state.sidebar.all_sort = config.sidebar.default_all_sort or "date"
   state.sidebar.all_filter = config.sidebar.default_all_filter or "all"
+  state.sidebar.todo_filter = config.sidebar.default_todo_filter or "all"
   state.sidebar.layout_mode = "docked"
   state.sidebar.standalone_host_win = nil
   state.sidebar.current_dir = nil

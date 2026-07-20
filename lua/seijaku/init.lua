@@ -6,10 +6,15 @@ local index = require("seijaku.index")
 local commands = require("seijaku.commands")
 local autocmds = require("seijaku.autocmds")
 local notes = require("seijaku.notes")
+local todos = require("seijaku.todos")
 local context = require("seijaku.context")
 local sidebar = require("seijaku.sidebar")
 
 function M.setup(opts)
+  if state.get().config and state.get().index then
+    index.save_sync()
+  end
+  index.stop_watcher()
   config.setup(opts or {})
   state.setup(config.get())
 
@@ -18,6 +23,8 @@ function M.setup(opts)
   if not ok then
     error("seijaku: " .. tostring(err), 0)
   end
+
+  index.start_watcher()
 
   commands.setup()
   autocmds.setup()
@@ -86,12 +93,29 @@ function M.mode_calendar()
   return sidebar.set_mode("calendar")
 end
 
+function M.mode_todo()
+  return sidebar.set_mode("todo")
+end
+
 function M.toggle_mode()
   return sidebar.toggle_mode()
 end
 
 function M.open_note(note_id)
   return notes.open(note_id)
+end
+
+function M.new_todo(opts)
+  opts = vim.deepcopy(opts or {})
+  local sidebar_state = state.get().sidebar
+  if not opts.calendar_date and sidebar_state.open and sidebar_state.mode == "calendar" then
+    opts.calendar_date = sidebar_state.calendar_date
+  end
+  return todos.create(opts)
+end
+
+function M.live_grep()
+  return require("seijaku.search").live_grep()
 end
 
 function M.attach_path(note_id, path)

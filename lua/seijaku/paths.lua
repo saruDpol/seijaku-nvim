@@ -65,6 +65,11 @@ function M.target_type(path)
   return stat.type or "unknown"
 end
 
+function M.exists(path)
+  local normalized = M.normalize(path)
+  return normalized ~= nil and vim.loop.fs_stat(normalized) ~= nil
+end
+
 function M.relative_to(base, path)
   base = M.normalize(base)
   path = M.normalize(path)

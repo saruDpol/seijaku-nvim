@@ -5,6 +5,13 @@ local paths = require("seijaku.paths")
 local util = require("seijaku.util")
 
 local save_timer = nil
+local reload_timer = nil
+local vault_watcher = nil
+local pending_upserts = {}
+local pending_deletes = {}
+local pending_todo_upserts = {}
+local pending_todo_deletes = {}
+local last_index_raw = nil
 
 local function stop_save_timer()
   if save_timer then
@@ -13,6 +20,16 @@ local function stop_save_timer()
       save_timer:close()
     end
     save_timer = nil
+  end
+end
+
+local function stop_reload_timer()
+  if reload_timer then
+    reload_timer:stop()
+    if not reload_timer:is_closing() then
+      reload_timer:close()
+    end
+    reload_timer = nil
   end
 end
 
@@ -26,10 +43,11 @@ end
 
 local function empty_index()
   return {
-    version = 1,
+    version = 2,
     created_at = util.now(),
     updated_at = util.now(),
     notes = {},
+    todos = {},
     targets = {},
     target_dirs = {},
   }
@@ -41,6 +59,118 @@ end
 
 local function decode_json(text)
   return vim.json.decode(text)
+end
+
+local function read_index_file(state)
+  local raw = util.read_file(state.index_path)
+  if not raw or raw == "" then
+    return empty_index(), raw
+  end
+
+  local ok, decoded = pcall(decode_json, raw)
+  if not ok or type(decoded) ~= "table" then
+    return nil, raw, "failed to parse " .. state.index_path .. "; the file was left unchanged"
+  end
+
+  decoded.notes = decoded.notes or {}
+  decoded.todos = decoded.todos or {}
+  decoded.version = math.max(tonumber(decoded.version) or 1, 2)
+  return decoded, raw
+end
+
+local function queue_upsert(note)
+  if not note or not note.id then
+    return
+  end
+  pending_deletes[note.id] = nil
+  pending_upserts[note.id] = vim.deepcopy(note)
+end
+
+local function queue_delete(note_id)
+  if not note_id then
+    return
+  end
+  pending_upserts[note_id] = nil
+  pending_deletes[note_id] = true
+end
+
+local function queue_todo_upsert(todo)
+  if not todo or not todo.id then
+    return
+  end
+  pending_todo_deletes[todo.id] = nil
+  pending_todo_upserts[todo.id] = vim.deepcopy(todo)
+end
+
+local function queue_todo_delete(todo_id)
+  if not todo_id then
+    return
+  end
+  pending_todo_upserts[todo_id] = nil
+  pending_todo_deletes[todo_id] = true
+end
+
+local function apply_pending(index)
+  index.notes = index.notes or {}
+  for note_id, _ in pairs(pending_deletes) do
+    index.notes[note_id] = nil
+  end
+  for note_id, note in pairs(pending_upserts) do
+    index.notes[note_id] = vim.deepcopy(note)
+  end
+  index.todos = index.todos or {}
+  for todo_id, _ in pairs(pending_todo_deletes) do
+    index.todos[todo_id] = nil
+  end
+  for todo_id, todo in pairs(pending_todo_upserts) do
+    index.todos[todo_id] = vim.deepcopy(todo)
+  end
+  return index
+end
+
+local function clear_pending()
+  pending_upserts = {}
+  pending_deletes = {}
+  pending_todo_upserts = {}
+  pending_todo_deletes = {}
+end
+
+local function has_pending()
+  return next(pending_upserts) ~= nil
+    or next(pending_deletes) ~= nil
+    or next(pending_todo_upserts) ~= nil
+    or next(pending_todo_deletes) ~= nil
+end
+
+local function acquire_index_lock(state)
+  local lock_path = state.index_path .. ".lock"
+  local acquired = false
+  local index_config = state.config.index or {}
+  local stale_after = index_config.stale_lock_ms or 10000
+  vim.wait(index_config.lock_timeout_ms or 2000, function()
+    local ok = vim.loop.fs_mkdir(lock_path, 448)
+    if ok then
+      acquired = true
+      return true
+    end
+
+    local stat = vim.loop.fs_stat(lock_path)
+    local modified = stat and stat.mtime and stat.mtime.sec or nil
+    if modified and (os.time() - modified) * 1000 > stale_after then
+      vim.loop.fs_rmdir(lock_path)
+    end
+    return false
+  end, 20)
+
+  if not acquired then
+    return nil, "timed out waiting for " .. lock_path
+  end
+  return lock_path
+end
+local function release_index_lock(lock_path)
+  if lock_path then
+    vim.loop.fs_rmdir(lock_path)
+  end
 end
 
 local function read_note_lines(abs_path)
@@ -149,22 +279,20 @@ function M.ensure_vault()
 end
 
 function M.load()
+  stop_save_timer()
+  stop_reload_timer()
+  clear_pending()
+  last_index_raw = nil
   local state = state_mod.get()
-  local raw = util.read_file(state.index_path)
+  local decoded, raw, err = read_index_file(state)
 
-  if not raw or raw == "" then
-    state.index = empty_index()
-  else
-    local ok, decoded = pcall(decode_json, raw)
-
-    if not ok or type(decoded) ~= "table" then
-      state.index = nil
-      return false, "failed to parse " .. state.index_path .. "; the file was left unchanged"
-    else
-      state.index = decoded
-    end
+  if not decoded then
+    state.index = nil
+    return false, err
   end
 
+  state.index = apply_pending(decoded)
+  last_index_raw = raw
   M.rebuild_derived_indexes()
   return true
 end
@@ -174,10 +302,12 @@ function M.rebuild_derived_indexes()
   local index = state.index or empty_index()
 
   index.notes = index.notes or {}
+  index.todos = index.todos or {}
   index.targets = {}
   index.target_dirs = {}
 
   state.notes_by_id = index.notes
+  state.todos_by_id = index.todos
   state.notes_by_file = {}
   state.note_ids_by_target = index.targets
   state.target_paths_by_dir = {}
@@ -252,14 +382,42 @@ local function write_index_sync()
   local json = encode_json(state.index)
 
   util.write_file(tmp_path, { json })
-  vim.fn.rename(tmp_path, state.index_path)
+  if vim.fn.rename(tmp_path, state.index_path) ~= 0 then
+    return false, "failed to replace " .. state.index_path
+  end
 
+  last_index_raw = json
   state_mod.clear_dirty()
+  return true
 end
 
-function M.save_sync()
+function M.save_sync(opts)
+  opts = opts or {}
   stop_save_timer()
-  write_index_sync()
+  local state = state_mod.get()
+  if not opts.force and not state.dirty and not has_pending() then
+    return true
+  end
+  local lock_path, lock_err = acquire_index_lock(state)
+  if not lock_path then
+    M.schedule_save()
+    return false, lock_err
+  end
+
+  local latest, _, read_err = read_index_file(state)
+  if not latest then
+    release_index_lock(lock_path)
+    return false, read_err
+  end
+
+  state.index = apply_pending(latest)
+  M.rebuild_derived_indexes()
+  local ok, write_err = write_index_sync()
+  if ok then
+    clear_pending()
+  end
+  release_index_lock(lock_path)
+  return ok, write_err
 end
 
 function M.schedule_save()
@@ -278,20 +436,115 @@ function M.schedule_save()
       return
     end
 
-    write_index_sync()
+    M.save_sync()
     if not timer:is_closing() then
       timer:close()
     end
-    save_timer = nil
+    if save_timer == timer then
+      save_timer = nil
+    end
   end))
 end
 
-function M.mark_dirty()
+local function refresh_sidebar_after_reload()
+  local ok, sidebar = pcall(require, "seijaku.sidebar")
+  if ok and state_mod.get().sidebar.open then
+    sidebar.refresh()
+  end
+end
+
+function M.reload_if_changed()
+  local state = state_mod.get()
+  local latest, raw, err = read_index_file(state)
+  if not latest then
+    util.notify("external index reload skipped: " .. tostring(err), vim.log.levels.ERROR)
+    return false, err
+  end
+  if raw == last_index_raw then
+    return false
+  end
+
+  state.index = apply_pending(latest)
+  last_index_raw = raw
+  M.rebuild_derived_indexes()
+  pcall(vim.cmd, "silent! checktime")
+  refresh_sidebar_after_reload()
+  return true
+end
+
+local function schedule_external_reload()
+  local state = state_mod.get()
+  local delay = (state.config.index or {}).reload_debounce_ms or 120
+  stop_reload_timer()
+  local timer = vim.loop.new_timer()
+  reload_timer = timer
+  timer:start(delay, 0, vim.schedule_wrap(function()
+    if reload_timer ~= timer then
+      if not timer:is_closing() then
+        timer:close()
+      end
+      return
+    end
+
+    M.reload_if_changed()
+    if not timer:is_closing() then
+      timer:close()
+    end
+    if reload_timer == timer then
+      reload_timer = nil
+    end
+  end))
+end
+
+function M.stop_watcher()
+  stop_reload_timer()
+  if vault_watcher then
+    vault_watcher:stop()
+    if not vault_watcher:is_closing() then
+      vault_watcher:close()
+    end
+    vault_watcher = nil
+  end
+end
+
+function M.start_watcher()
+  M.stop_watcher()
+  local state = state_mod.get()
+  if (state.config.index or {}).watch_external_changes == false then
+    return false
+  end
+
+  local watcher = vim.loop.new_fs_event()
+  local ok, err = watcher:start(state.vault_dir, {}, function(watch_err, filename)
+    if watch_err then
+      vim.schedule(function()
+        util.notify("vault watcher error: " .. tostring(watch_err), vim.log.levels.WARN)
+      end)
+      return
+    end
+
+    if not filename or filename == "index.json" then
+      schedule_external_reload()
+    end
+  end)
+
+  if not ok then
+    watcher:close()
+    return false, err
+  end
+
+  vault_watcher = watcher
+  return true
+end
+
+function M.mark_dirty(note)
+  queue_upsert(note)
   state_mod.mark_dirty()
   M.schedule_save()
 end
 
-function M.mark_dirty_sync()
+function M.mark_dirty_sync(note)
+  queue_upsert(note)
   structural_save()
 end
 
@@ -312,8 +565,10 @@ function M.add_note(note, opts)
   end
 
   if opts.defer_save then
+    queue_upsert(note)
     state_mod.mark_dirty()
   else
+    queue_upsert(note)
     structural_save()
   end
 end
@@ -342,7 +597,7 @@ function M.touch_note_for_file(file_path)
   end
 
   note.updated_at = util.now()
-  M.mark_dirty()
+  M.mark_dirty(note)
   return true
 end
 
@@ -359,6 +614,91 @@ function M.list_notes()
   end)
 
   return result
+end
+
+function M.add_todo(todo, opts)
+  opts = opts or {}
+  if not todo or not todo.id then
+    return false, "invalid todo"
+  end
+
+  local state = state_mod.get()
+  state.index.todos = state.index.todos or {}
+  state.index.todos[todo.id] = todo
+  state.todos_by_id[todo.id] = todo
+  queue_todo_upsert(todo)
+
+  if opts.defer_save then
+    state_mod.mark_dirty()
+  else
+    structural_save()
+  end
+  return true
+end
+
+function M.get_todo(todo_id)
+  return state_mod.get().todos_by_id[todo_id]
+end
+
+function M.list_todos()
+  local result = {}
+  for _, todo in pairs(state_mod.get().todos_by_id or {}) do
+    table.insert(result, todo)
+  end
+
+  table.sort(result, function(a, b)
+    local a_date = M.todo_date(a) or ""
+    local b_date = M.todo_date(b) or ""
+    if a_date ~= b_date then
+      return a_date > b_date
+    end
+    return tostring(a.created_at or "") > tostring(b.created_at or "")
+  end)
+  return result
+end
+
+function M.todo_date(todo)
+  if todo and todo.calendar_date then
+    return todo.calendar_date
+  end
+  return todo and tostring(todo.created_at or ""):match("^(%d%d%d%d%-%d%d%-%d%d)") or nil
+end
+
+function M.get_todos_for_calendar_date(date)
+  local result = {}
+  for _, todo in pairs(state_mod.get().todos_by_id or {}) do
+    if M.todo_date(todo) == date then
+      table.insert(result, todo)
+    end
+  end
+
+  table.sort(result, function(a, b)
+    return tostring(a.created_at or "") > tostring(b.created_at or "")
+  end)
+  return result
+end
+
+function M.update_todo(todo)
+  if not todo or not todo.id or not M.get_todo(todo.id) then
+    return false, "todo not found"
+  end
+  state_mod.get().index.todos[todo.id] = todo
+  state_mod.get().todos_by_id[todo.id] = todo
+  queue_todo_upsert(todo)
+  structural_save()
+  return true
+end
+
+function M.delete_todo(todo_id)
+  local state = state_mod.get()
+  if not M.get_todo(todo_id) then
+    return false, "todo not found"
+  end
+  state.index.todos[todo_id] = nil
+  state.todos_by_id[todo_id] = nil
+  queue_todo_delete(todo_id)
+  structural_save()
+  return true
 end
 
 function M.calendar_date(note)
@@ -396,6 +736,13 @@ function M.get_calendar_counts(year, month)
     end
   end
 
+  for _, todo in pairs(state_mod.get().todos_by_id or {}) do
+    local date = M.todo_date(todo)
+    if date and date:sub(1, #prefix) == prefix then
+      counts[date] = (counts[date] or 0) + 1
+    end
+  end
+
   return counts
 end
 
@@ -416,6 +763,7 @@ function M.set_calendar_date(note_id, date)
   if state.index and state.index.notes then
     state.index.notes[note_id] = note
   end
+  queue_upsert(note)
   structural_save()
   sync_note_metadata(note)
 
@@ -470,8 +818,10 @@ function M.attach(note_id, target_path, target_type, opts)
 
   M.rebuild_derived_indexes()
   if opts.defer_save then
+    queue_upsert(note)
     state_mod.mark_dirty()
   else
+    queue_upsert(note)
     structural_save()
   end
   sync_note_metadata(note)
@@ -520,8 +870,10 @@ function M.detach(note_id, target_path, opts)
 
   M.rebuild_derived_indexes()
   if opts.defer_save then
+    queue_upsert(note)
     state_mod.mark_dirty()
   else
+    queue_upsert(note)
     structural_save()
   end
   sync_note_metadata(note)
@@ -559,6 +911,7 @@ function M.delete_note(note_id, opts)
   index.notes[note_id] = nil
 
   M.rebuild_derived_indexes()
+  queue_delete(note_id)
   if opts.defer_save then
     state_mod.mark_dirty()
   else
@@ -569,9 +922,13 @@ function M.delete_note(note_id, opts)
 end
 
 function M.reconcile_vault()
+  M.reload_if_changed()
   local state = state_mod.get()
   local notes_dir = paths.join(state.vault_dir, "notes")
   local seen_files = {}
+  local disk_notes_by_id = {}
+  local conflicts = {}
+  local conflicting_ids = {}
   local imported = 0
   local removed = 0
 
@@ -596,10 +953,9 @@ function M.reconcile_vault()
         if rel_path then
           seen_files[rel_path] = true
           local note = note_from_file(state, rel_path)
-
-          if note and not state.index.notes[note.id] then
-            state.index.notes[note.id] = note
-            imported = imported + 1
+          if note then
+            disk_notes_by_id[note.id] = disk_notes_by_id[note.id] or {}
+            table.insert(disk_notes_by_id[note.id], note)
           end
         end
       end
@@ -608,22 +964,55 @@ function M.reconcile_vault()
 
   walk(notes_dir)
 
+  for note_id, candidates in pairs(disk_notes_by_id) do
+    if #candidates > 1 then
+      local files = {}
+      for _, candidate in ipairs(candidates) do
+        table.insert(files, candidate.file)
+      end
+      table.sort(files)
+      conflicting_ids[note_id] = true
+      table.insert(conflicts, {
+        id = note_id,
+        files = files,
+      })
+    end
+  end
+  table.sort(conflicts, function(a, b)
+    return a.id < b.id
+  end)
+
   for note_id, note in pairs(state.index.notes or {}) do
-    if note.file and not seen_files[note.file] then
+    if note.file and not seen_files[note.file] and not conflicting_ids[note_id] then
       state.index.notes[note_id] = nil
+      queue_delete(note_id)
       removed = removed + 1
+    end
+  end
+
+  -- Remove stale paths before importing files. If a Markdown note was moved
+  -- inside the vault, its ID still exists in the old index entry during the
+  -- scan; importing first would therefore skip it until a second reconcile.
+  for note_id, candidates in pairs(disk_notes_by_id) do
+    local note = #candidates == 1 and candidates[1] or nil
+    if note and not state.index.notes[note_id] then
+      state.index.notes[note.id] = note
+      queue_upsert(note)
+      imported = imported + 1
     end
   end
 
   M.rebuild_derived_indexes()
 
   if imported > 0 or removed > 0 then
-    structural_save()
+    state_mod.mark_dirty()
+    M.save_sync()
   end
 
   return {
     imported = imported,
     removed = removed,
+    conflicts = conflicts,
   }
 end
 

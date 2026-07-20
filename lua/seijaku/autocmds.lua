@@ -18,10 +18,53 @@ function M.setup()
         if managed then
           return
         end
+
+        if vim.bo[args.buf].filetype == "netrw" then
+          require("seijaku.context").get_current()
+        end
       end
 
       if state.sidebar.open then
         require("seijaku.sidebar").schedule_refresh()
+      end
+    end,
+  })
+
+  local function capture_netrw(buf, refresh)
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(buf) or vim.bo[buf].filetype ~= "netrw" then
+        return
+      end
+
+      local win = vim.fn.bufwinid(buf)
+      if win == -1 or not vim.api.nvim_win_is_valid(win) then
+        return
+      end
+
+      vim.api.nvim_win_call(win, function()
+        require("seijaku.context").get_current()
+      end)
+
+      local state = require("seijaku.state").get()
+      if refresh and state.sidebar.open then
+        require("seijaku.sidebar").schedule_refresh()
+      end
+    end)
+  end
+
+  vim.api.nvim_create_autocmd("FileType", {
+    group = group,
+    pattern = "netrw",
+    callback = function(args)
+      capture_netrw(args.buf, true)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("CursorMoved", {
+    group = group,
+    callback = function(args)
+      if vim.bo[args.buf].filetype == "netrw" then
+        capture_netrw(args.buf, false)
       end
     end,
   })
@@ -88,6 +131,7 @@ function M.setup()
     group = group,
     callback = function()
       require("seijaku.index").save_sync()
+      require("seijaku.index").stop_watcher()
     end,
   })
 end

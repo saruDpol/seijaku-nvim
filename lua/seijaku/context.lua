@@ -93,6 +93,42 @@ local function oil_context()
   return directory_context
 end
 
+local function netrw_context()
+  local state = state_mod.get()
+
+  if state.config
+      and state.config.integrations
+      and state.config.integrations.netrw == false then
+    return nil
+  end
+
+  local dir = vim.b.netrw_curdir
+  if type(dir) ~= "string" or dir == "" or dir:match("^%a[%w+.-]*://") then
+    return nil
+  end
+
+  local directory_context = context_for_target(dir, "directory", "netrw")
+  local association_context = directory_context
+  local view = vim.fn.winsaveview()
+  local ok_word, word = pcall(vim.fn["netrw#Call"], "NetrwGetWord")
+  pcall(vim.fn.winrestview, view)
+
+  if ok_word and type(word) == "string" and word ~= "" then
+    local ok_path, target_path = pcall(vim.fn["netrw#Call"], "NetrwFile", word)
+    if ok_path and type(target_path) == "string" and target_path ~= "" then
+      local target_type = paths.target_type(target_path)
+      if target_type ~= "unknown" then
+        association_context = context_for_target(target_path, target_type, "netrw")
+      end
+    end
+  end
+
+  remember(directory_context)
+  state.context.association = vim.deepcopy(association_context)
+
+  return directory_context
+end
+
 function M.get_current()
   local state = state_mod.get()
   local current_buf = vim.api.nvim_get_current_buf()
@@ -109,6 +145,10 @@ function M.get_current()
 
   if filetype == "oil" then
     return oil_context() or fallback_context()
+  end
+
+  if filetype == "netrw" then
+    return netrw_context() or fallback_context()
   end
 
   if filetype == "seijaku" then
@@ -155,6 +195,11 @@ function M.get_association_target()
 
   if vim.bo.filetype == "oil" then
     oil_context()
+    return state.context.association and vim.deepcopy(state.context.association) or fallback_context()
+  end
+
+  if vim.bo.filetype == "netrw" then
+    netrw_context()
     return state.context.association and vim.deepcopy(state.context.association) or fallback_context()
   end
 

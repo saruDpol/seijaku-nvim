@@ -20,8 +20,6 @@ files—no database, web view or proprietary format.
 <!--    ≡ desc_config                        config.lua -->
 <!-- ``` -->
 
-Early development, already usable as a daily notes workflow.
-
 ## ◆ Highlights
 
 - Four views: global index, filesystem context, todos and calendar.

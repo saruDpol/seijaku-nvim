@@ -236,10 +236,7 @@ local function add_header(lines, line_items, title)
 			inactive_width = inactive_width + display_width(label)
 		end
 	end
-	local available_active = math.max(
-		3,
-		width - inactive_width - (#mode_labels - 1)
-	)
+	local available_active = math.max(3, width - inactive_width - (#mode_labels - 1))
 	mode_labels[active_index] = truncate_left(mode_labels[active_index], available_active)
 	local labels_width = 0
 	for _, label in ipairs(mode_labels) do
@@ -315,6 +312,11 @@ local function apply_highlights(buf, lines, line_items)
 	vim.api.nvim_set_hl(0, "SeijakuTodoOpen", { fg = "#c05f7e", ctermfg = 168 })
 	vim.api.nvim_set_hl(0, "SeijakuTodoClosed", { fg = "#66645f", ctermfg = 242 })
 	vim.api.nvim_set_hl(0, "SeijakuTodoStrike", { fg = "#66645f", ctermfg = 242, strikethrough = true })
+	vim.api.nvim_set_hl(0, "SeijakuDateToday", {
+		fg = "#9f3434",
+		ctermfg = 203,
+		bold = false,
+	})
 
 	local highlight_by_kind = {
 		subheader = "SeijakuSubheader",
@@ -330,6 +332,11 @@ local function apply_highlights(buf, lines, line_items)
 
 	for line, item in pairs(line_items or {}) do
 		local group = item and highlight_by_kind[item.kind]
+
+		if item and item.kind == "date" and item.is_today then
+			group = "SeijakuDateToday"
+		end
+
 		if item and item.missing_target then
 			group = "SeijakuMissingTarget"
 		end
@@ -506,6 +513,9 @@ function M.render_all()
 	local lines = {}
 	local line_items = {}
 
+	local today = calendar.today()
+	local today_key = calendar.format(today.year, today.month, today.day)
+
 	local filter = note_type_groups[sidebar_state().all_filter] and sidebar_state().all_filter or "all"
 	sidebar_state().all_filter = filter
 	add_header(lines, line_items, "すべて")
@@ -553,7 +563,10 @@ function M.render_all()
 				if note_date ~= current_date then
 					current_date = note_date
 					table.insert(lines, " " .. note_date)
-					line_items[#lines] = { kind = "date" }
+					line_items[#lines] = {
+						kind = "date",
+						is_today = note_date == today_key,
+					}
 				end
 			end
 
@@ -919,9 +932,7 @@ local function is_empty_scratch_window(win)
 		return false
 	end
 	local buf = vim.api.nvim_win_get_buf(win)
-	return vim.api.nvim_buf_get_name(buf) == ""
-		and vim.bo[buf].buftype == ""
-		and not vim.bo[buf].modified
+	return vim.api.nvim_buf_get_name(buf) == "" and vim.bo[buf].buftype == "" and not vim.bo[buf].modified
 end
 
 local function external_windows()
@@ -1728,8 +1739,10 @@ function M.sync_mode_preview(force)
 			-- from promoting and then closing each additional note one by one.
 			return
 		end
-		if is_valid_win(sidebar.preview_win)
-			and (not is_valid_buf(sidebar.preview_buf) or not vim.bo[sidebar.preview_buf].modified) then
+		if
+			is_valid_win(sidebar.preview_win)
+			and (not is_valid_buf(sidebar.preview_buf) or not vim.bo[sidebar.preview_buf].modified)
+		then
 			close_preview_window()
 		end
 		return

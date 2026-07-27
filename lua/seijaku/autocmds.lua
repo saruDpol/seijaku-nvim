@@ -2,6 +2,13 @@ local M = {}
 
 function M.setup()
   local group = vim.api.nvim_create_augroup("Seijaku", { clear = true })
+  local sidebar = require("seijaku.sidebar")
+
+  sidebar.define_highlights()
+  vim.api.nvim_create_autocmd("ColorScheme", {
+    group = group,
+    callback = sidebar.define_highlights,
+  })
 
   vim.api.nvim_create_autocmd({ "BufEnter", "DirChanged" }, {
     group = group,

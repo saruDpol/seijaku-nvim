@@ -11,11 +11,6 @@ local valid_note_types = {
   desc = true,
 }
 
-local function note_type(note)
-  local value = note and note.note_type or "general"
-  return valid_note_types[value] and value or "general"
-end
-
 local function unique_notes(grouped)
   local result = {}
   local seen = {}
@@ -42,12 +37,7 @@ function M.notes_for_current_scope()
 
   if sidebar.mode == "all" then
     local filter = valid_note_types[sidebar.all_filter] and sidebar.all_filter or "all"
-    local notes = index.list_notes()
-    if filter ~= "all" then
-      notes = vim.tbl_filter(function(note)
-        return note_type(note) == filter
-      end, notes)
-    end
+    local notes = index.query_notes({ sort = "updated", filter = filter })
     return notes, filter == "all" and "all notes" or (filter .. " notes")
   end
 

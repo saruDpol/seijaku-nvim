@@ -12,6 +12,11 @@ local pending_deletes = {}
 local pending_todo_upserts = {}
 local pending_todo_deletes = {}
 local last_index_raw = nil
+local note_query_cache = {}
+
+local function invalidate_note_queries()
+  note_query_cache = {}
+end
 
 local function stop_save_timer()
   if save_timer then
@@ -301,6 +306,7 @@ function M.rebuild_derived_indexes()
   local state = state_mod.get()
   local index = state.index or empty_index()
 
+  invalidate_note_queries()
   index.notes = index.notes or {}
   index.todos = index.todos or {}
   index.targets = {}
@@ -538,12 +544,14 @@ function M.start_watcher()
 end
 
 function M.mark_dirty(note)
+  invalidate_note_queries()
   queue_upsert(note)
   state_mod.mark_dirty()
   M.schedule_save()
 end
 
 function M.mark_dirty_sync(note)
+  invalidate_note_queries()
   queue_upsert(note)
   structural_save()
 end
@@ -553,6 +561,7 @@ function M.add_note(note, opts)
   local state = state_mod.get()
   local index = state.index
 
+  invalidate_note_queries()
   index.notes[note.id] = note
   state.notes_by_id[note.id] = note
 
@@ -601,18 +610,81 @@ function M.touch_note_for_file(file_path)
   return true
 end
 
-function M.list_notes()
-  local state = state_mod.get()
-  local result = {}
+local function normalized_note_type(note)
+  return note and note.note_type or "general"
+end
 
-  for _, note in pairs(state.notes_by_id or {}) do
-    table.insert(result, note)
+local function note_comparator(sort)
+  if sort == "date" then
+    return function(a, b)
+      local a_date = tostring(M.calendar_date(a) or "")
+      local b_date = tostring(M.calendar_date(b) or "")
+      if a_date ~= b_date then
+        return a_date > b_date
+      end
+
+      local a_updated = tostring(a.updated_at or "")
+      local b_updated = tostring(b.updated_at or "")
+      if a_updated ~= b_updated then
+        return a_updated > b_updated
+      end
+      return tostring(a.id or "") < tostring(b.id or "")
+    end
   end
 
-  table.sort(result, function(a, b)
-    return tostring(a.updated_at or "") > tostring(b.updated_at or "")
-  end)
+  if sort == "created" then
+    return function(a, b)
+      local a_created = tostring(a.created_at or "")
+      local b_created = tostring(b.created_at or "")
+      if a_created ~= b_created then
+        return a_created > b_created
+      end
+      return tostring(a.id or "") < tostring(b.id or "")
+    end
+  end
 
+  return function(a, b)
+    local a_updated = tostring(a.updated_at or "")
+    local b_updated = tostring(b.updated_at or "")
+    if a_updated ~= b_updated then
+      return a_updated > b_updated
+    end
+    return tostring(a.id or "") < tostring(b.id or "")
+  end
+end
+
+function M.query_notes(opts)
+  opts = opts or {}
+  local sort = opts.sort
+  if sort ~= "date" and sort ~= "created" then
+    sort = "updated"
+  end
+  local filter = opts.filter or "all"
+  local cache_key = sort .. "\0" .. filter
+  local cached = note_query_cache[cache_key]
+  if cached then
+    return cached
+  end
+
+  local result = {}
+
+  for _, note in pairs(state_mod.get().notes_by_id or {}) do
+    if filter == "all" or normalized_note_type(note) == filter then
+      table.insert(result, note)
+    end
+  end
+
+  table.sort(result, note_comparator(sort))
+  note_query_cache[cache_key] = result
+  return result
+end
+
+function M.list_notes()
+  local cached = M.query_notes({ sort = "updated", filter = "all" })
+  local result = {}
+  for i, note in ipairs(cached) do
+    result[i] = note
+  end
   return result
 end
 
@@ -760,6 +832,7 @@ function M.set_calendar_date(note_id, date)
 
   note.calendar_date = date
   note.updated_at = util.now()
+  invalidate_note_queries()
   if state.index and state.index.notes then
     state.index.notes[note_id] = note
   end

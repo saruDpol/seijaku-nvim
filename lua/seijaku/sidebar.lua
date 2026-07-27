@@ -10,6 +10,7 @@ local calendar = require("seijaku.calendar")
 
 local refresh_timer = nil
 local highlight_ns = vim.api.nvim_create_namespace("seijaku_sidebar")
+local highlights_defined = false
 
 local note_type_groups = {
 	general = "SeijakuNoteGeneral",
@@ -127,13 +128,19 @@ local function truncate_left(text, width)
 
 	local marker = "..."
 	local available = math.max(1, width - display_width(marker))
-	local result = text
-
-	while result ~= "" and display_width(result) > available do
-		result = vim.fn.strcharpart(result, 1)
+	local chars = vim.fn.strchars(text)
+	local low, high = 0, chars
+	while low < high do
+		local count = math.floor((low + high + 1) / 2)
+		local candidate = vim.fn.strcharpart(text, chars - count, count)
+		if display_width(candidate) <= available then
+			low = count
+		else
+			high = count - 1
+		end
 	end
 
-	return marker .. result
+	return marker .. vim.fn.strcharpart(text, chars - low, low)
 end
 
 local function truncate_right(text, width)
@@ -144,12 +151,19 @@ local function truncate_right(text, width)
 
 	local marker = "..."
 	local available = math.max(1, width - display_width(marker))
-	local result = text
-	while result ~= "" and display_width(result) > available do
-		result = vim.fn.strcharpart(result, 0, vim.fn.strchars(result) - 1)
+	local chars = vim.fn.strchars(text)
+	local low, high = 0, chars
+	while low < high do
+		local count = math.floor((low + high + 1) / 2)
+		local candidate = vim.fn.strcharpart(text, 0, count)
+		if display_width(candidate) <= available then
+			low = count
+		else
+			high = count - 1
+		end
 	end
 
-	return result .. marker
+	return vim.fn.strcharpart(text, 0, low) .. marker
 end
 
 local function compact_path(path, width)
@@ -281,17 +295,7 @@ local function add_header(lines, line_items, title)
 	line_items[#lines] = { kind = "spacer" }
 end
 
-local function apply_highlights(buf, lines, line_items)
-	local sidebar = sidebar_state()
-	buf = buf or sidebar.buf
-	lines = lines or sidebar.lines
-	line_items = line_items or sidebar.line_items
-
-	if not is_valid_buf(buf) then
-		return
-	end
-
-	vim.api.nvim_buf_clear_namespace(buf, highlight_ns, 0, -1)
+function M.define_highlights()
 	vim.api.nvim_set_hl(0, "SeijakuHeader", { bold = true })
 	vim.api.nvim_set_hl(0, "SeijakuBrand", { fg = "#769267", ctermfg = 108, bold = false })
 	vim.api.nvim_set_hl(0, "SeijakuModeActive", { fg = "#9f3434", ctermfg = 217, bold = true })
@@ -312,11 +316,30 @@ local function apply_highlights(buf, lines, line_items)
 	vim.api.nvim_set_hl(0, "SeijakuTodoOpen", { fg = "#c05f7e", ctermfg = 168 })
 	vim.api.nvim_set_hl(0, "SeijakuTodoClosed", { fg = "#66645f", ctermfg = 242 })
 	vim.api.nvim_set_hl(0, "SeijakuTodoStrike", { fg = "#66645f", ctermfg = 242, strikethrough = true })
+	vim.api.nvim_set_hl(0, "SeijakuPickerNormal", { bg = "NONE" })
+	vim.api.nvim_set_hl(0, "SeijakuPickerCursor", { bg = "NONE", bold = true })
 	vim.api.nvim_set_hl(0, "SeijakuDateToday", {
 		fg = "#9f3434",
 		ctermfg = 203,
 		bold = false,
 	})
+	highlights_defined = true
+end
+
+local function apply_highlights(buf, lines, line_items)
+	local sidebar = sidebar_state()
+	buf = buf or sidebar.buf
+	lines = lines or sidebar.lines
+	line_items = line_items or sidebar.line_items
+
+	if not is_valid_buf(buf) then
+		return
+	end
+
+	if not highlights_defined then
+		M.define_highlights()
+	end
+	vim.api.nvim_buf_clear_namespace(buf, highlight_ns, 0, -1)
 
 	local highlight_by_kind = {
 		subheader = "SeijakuSubheader",
@@ -451,7 +474,20 @@ local function note_line(note)
 	return icon .. " " .. title
 end
 
-local function all_note_line(note)
+local function target_exists(target_path, cache)
+	local cached = cache and cache[target_path]
+	if cached ~= nil then
+		return cached
+	end
+
+	local exists = paths.exists(target_path)
+	if cache then
+		cache[target_path] = exists
+	end
+	return exists
+end
+
+local function all_note_line(note, exists_cache)
 	local width = sidebar_width()
 	local left = "   " .. note_type_icons[note_type(note)] .. " " .. tostring(note.title or note.id)
 	local first_target = note.targets and note.targets[1]
@@ -461,7 +497,7 @@ local function all_note_line(note)
 	end
 
 	local right = paths.basename(first_target.path)
-	local missing_target = not paths.exists(first_target.path)
+	local missing_target = not target_exists(first_target.path, exists_cache)
 	if missing_target then
 		right = "! " .. right
 	end
@@ -493,11 +529,11 @@ local function path_icon(target_path, target_type)
 	return "󰈔 "
 end
 
-local function target_label(target_path)
+local function target_label(target_path, exists_cache)
 	local target_type = paths.target_type(target_path)
 	local width = math.max(8, sidebar_width() - 2)
 	local label = truncate_left(target_name(target_path), width)
-	local missing = not paths.exists(target_path)
+	local missing = not target_exists(target_path, exists_cache)
 
 	if missing then
 		return "! " .. label, true
@@ -508,38 +544,23 @@ end
 function M.render_all()
 	local state = state_mod.get()
 	local limit = state.config.sidebar.all_mode_limit or 500
-	local all_notes = index.list_notes()
-	local has_any_notes = #all_notes > 0
 	local lines = {}
 	local line_items = {}
+	local exists_cache = {}
 
 	local today = calendar.today()
 	local today_key = calendar.format(today.year, today.month, today.day)
 
 	local filter = note_type_groups[sidebar_state().all_filter] and sidebar_state().all_filter or "all"
 	sidebar_state().all_filter = filter
+	local sort = sidebar_state().all_sort
+	if sort ~= "date" and sort ~= "created" then
+		sort = "updated"
+	end
+	sidebar_state().all_sort = sort
+	local all_notes = index.query_notes({ sort = sort, filter = filter })
+	local has_any_notes = next(state.notes_by_id or {}) ~= nil
 	add_header(lines, line_items, "すべて")
-
-	if filter ~= "all" then
-		all_notes = vim.tbl_filter(function(note)
-			return note_type(note) == filter
-		end, all_notes)
-	end
-
-	if sidebar_state().all_sort == "date" then
-		table.sort(all_notes, function(a, b)
-			local a_date = tostring(index.calendar_date(a) or "")
-			local b_date = tostring(index.calendar_date(b) or "")
-			if a_date == b_date then
-				return tostring(a.updated_at or "") > tostring(b.updated_at or "")
-			end
-			return a_date > b_date
-		end)
-	elseif sidebar_state().all_sort == "created" then
-		table.sort(all_notes, function(a, b)
-			return tostring(a.created_at or "") > tostring(b.created_at or "")
-		end)
-	end
 
 	if #all_notes == 0 then
 		table.insert(lines, has_any_notes and "No notes for this filter" or "No notes yet")
@@ -552,9 +573,9 @@ function M.render_all()
 				break
 			end
 
-			if sidebar_state().all_sort == "date" or sidebar_state().all_sort == "created" then
+			if sort == "date" or sort == "created" then
 				local note_date
-				if sidebar_state().all_sort == "date" then
+				if sort == "date" then
 					note_date = index.calendar_date(note)
 				else
 					note_date = tostring(note.created_at or ""):match("^%d%d%d%d%-%d%d%-%d%d")
@@ -570,7 +591,7 @@ function M.render_all()
 				end
 			end
 
-			local line, target_start, target_end, missing_target = all_note_line(note)
+			local line, target_start, target_end, missing_target = all_note_line(note, exists_cache)
 			table.insert(lines, line)
 			line_items[#lines] = {
 				kind = "note",
@@ -711,6 +732,7 @@ function M.render_directory()
 	local current_type = ctx and ctx.target_type or nil
 	local line_items = {}
 	local lines = {}
+	local exists_cache = {}
 
 	sidebar.current_dir = dir
 	sidebar.current_target = current_target
@@ -748,7 +770,7 @@ function M.render_directory()
 			local target_indent = " " .. string.rep("  ", depth)
 
 			shown = shown + 1
-			local label, missing_target = target_label(target_path)
+			local label, missing_target = target_label(target_path, exists_cache)
 			table.insert(lines, target_indent .. label)
 			line_items[#lines] = {
 				kind = "target",
@@ -830,7 +852,7 @@ function M.render_directory()
 			for _, name in ipairs(names) do
 				local child = node.children[name]
 				local indent = " " .. string.rep("  ", depth)
-				local label, missing_target = target_label(child.path)
+				local label, missing_target = target_label(child.path, exists_cache)
 				table.insert(lines, indent .. label)
 				line_items[#lines] = {
 					kind = child.target_path and "target" or "folder",
@@ -1225,13 +1247,14 @@ function M.render_calendar_notes()
 	local day_todos = index.get_todos_for_calendar_date(date)
 	local lines = {}
 	local line_items = {}
+	local exists_cache = {}
 
 	if #day_notes == 0 and #day_todos == 0 then
 		table.insert(lines, "No items for this day")
 		line_items[#lines] = { kind = "help" }
 	else
 		for _, note in ipairs(day_notes) do
-			local line, target_start, target_end, missing_target = all_note_line(note)
+			local line, target_start, target_end, missing_target = all_note_line(note, exists_cache)
 			table.insert(lines, line)
 			line_items[#lines] = {
 				kind = "note",
@@ -1828,15 +1851,12 @@ end
 
 function M.handle_create()
 	if sidebar_state().mode == "todo" then
-		todos.create({ on_created = M.refresh })
+		todos.create()
 		return
 	end
 	notes.create({
-		title = "Untitled",
+		title = "note-",
 		calendar_date = sidebar_state().mode == "calendar" and sidebar_state().calendar_date or nil,
-		on_created = function()
-			M.refresh()
-		end,
 	})
 end
 
@@ -1846,7 +1866,6 @@ function M.handle_create_todo_for_calendar()
 	end
 	todos.create({
 		calendar_date = sidebar_state().calendar_date,
-		on_created = M.refresh,
 	})
 end
 
@@ -1863,13 +1882,10 @@ function M.handle_create_for_context()
 	end
 
 	notes.create({
-		title = paths.basename(ctx.target_path) or "Untitled",
+		title = paths.basename(ctx.target_path) or "note-",
 		target_path = ctx.target_path,
 		target_type = ctx.target_type,
 		calendar_date = sidebar_state().mode == "calendar" and sidebar_state().calendar_date or nil,
-		on_created = function()
-			M.refresh()
-		end,
 	})
 end
 
@@ -2001,6 +2017,41 @@ function M.calendar_today()
 	local today = calendar.today()
 	sidebar_state().calendar_date = calendar.format(today.year, today.month, today.day)
 	M.refresh()
+end
+
+function M.all_today()
+	local sidebar = sidebar_state()
+	if sidebar.mode ~= "all" or not is_valid_win(sidebar.win) then
+		return false
+	end
+
+	local today = calendar.today()
+	local today_key = calendar.format(today.year, today.month, today.day)
+	for line = 1, #(sidebar.lines or {}) do
+		local item = sidebar.line_items[line]
+		if item and item.kind == "note" then
+			local note = index.get_note(item.note_id)
+			if note and index.calendar_date(note) == today_key then
+				pcall(vim.api.nvim_win_set_cursor, sidebar.win, { line, 0 })
+				vim.api.nvim_win_call(sidebar.win, function()
+					vim.cmd("normal! zt")
+				end)
+				M.preview_selected()
+				return true
+			end
+		end
+	end
+
+	vim.notify("seijaku: no notes for today in the current list", vim.log.levels.INFO)
+	return false
+end
+
+function M.go_to_today()
+	if sidebar_state().mode == "calendar" then
+		M.calendar_today()
+	elseif sidebar_state().mode == "all" then
+		M.all_today()
+	end
 end
 
 function M.calendar_month_edge(last)
@@ -2149,7 +2200,7 @@ function M.setup_mappings(buf)
 		end)
 	end, opts)
 	vim.keymap.set("n", "t", function()
-		calendar_or_normal(M.calendar_today)
+		M.go_to_today()
 	end, opts)
 	vim.keymap.set("n", "gg", function()
 		calendar_or_normal(function()

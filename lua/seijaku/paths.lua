@@ -66,6 +66,21 @@ function M.target_type(path)
 end
 
 function M.exists(path)
+  if not path or path == "" then
+    return false
+  end
+
+  if vim.loop.fs_stat(path) ~= nil then
+    return true
+  end
+
+  local is_absolute = path:sub(1, 1) == "/"
+    or path:match("^%a:[/\\]") ~= nil
+    or path:match("^[/\\][/\\]") ~= nil
+  if is_absolute then
+    return false
+  end
+
   local normalized = M.normalize(path)
   return normalized ~= nil and vim.loop.fs_stat(normalized) ~= nil
 end

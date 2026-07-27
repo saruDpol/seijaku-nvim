@@ -2,6 +2,7 @@ local M = {}
 
 local index = require("seijaku.index")
 local util = require("seijaku.util")
+local calendar = require("seijaku.calendar")
 
 local function normalize_text(value)
   return vim.trim(tostring(value or ""):gsub("[\r\n]+", " "))
@@ -28,14 +29,20 @@ end
 
 function M.create(opts)
   opts = opts or {}
-  if opts.calendar_date and not require("seijaku.calendar").parse(opts.calendar_date) then
+  local calendar_date = opts.calendar_date
+  if not calendar_date then
+    local today = calendar.today()
+    calendar_date = calendar.format(today.year, today.month, today.day)
+  end
+  if calendar_date and not calendar.parse(calendar_date) then
     vim.notify("seijaku: invalid todo date", vim.log.levels.ERROR)
     return false
   end
-  vim.ui.input({ prompt = "Todo: " }, function(input)
+
+  local function create_with_text(input)
     local text = normalize_text(input)
     if text == "" then
-      return
+      return false
     end
 
     local now = util.now()
@@ -44,20 +51,27 @@ function M.create(opts)
       text = text,
       created_at = now,
       updated_at = now,
-      calendar_date = opts.calendar_date,
+      calendar_date = calendar_date,
       completed_at = nil,
     }
 
     local ok, err = index.add_todo(todo)
     if not ok then
       vim.notify("seijaku: " .. tostring(err or "failed to create todo"), vim.log.levels.ERROR)
-      return
+      return false
     end
     if opts.on_created then
       opts.on_created(todo)
     end
     refresh_sidebar()
-  end)
+    return true
+  end
+
+  if opts.text ~= nil then
+    return create_with_text(opts.text)
+  end
+
+  require("seijaku.notes").input_title("todo", "", create_with_text)
   return true
 end
 
@@ -81,10 +95,7 @@ function M.rename(todo_id)
     return false, "todo not found"
   end
 
-  vim.ui.input({
-    prompt = "Todo: ",
-    default = todo.text or "",
-  }, function(input)
+  require("seijaku.notes").input_title("todo", todo.text or "", function(input)
     local text = normalize_text(input)
     if text == "" or text == todo.text then
       return

@@ -110,19 +110,22 @@ require("seijaku").setup({
 
 ## ◇ Notes
 
-Creating a note first opens a one-key type selector—pressing `1`–`4` accepts
-immediately; `Esc` cancels.
+Creating a note first opens a small native picker. Move with `j/k` or the arrow
+keys and confirm with `Enter`; pressing `1`–`5` selects immediately. The same
+transparent popup then becomes a name input with the suggested title ready to
+edit. Press `Enter` to create the item; `Esc` or `q` cancels the type picker.
 
 | Key | Type        | Mark | Suggested title              |
 | --- | ----------- | :--: | ---------------------------- |
-| `1` | General     | `·`  | Current target or `Untitled` |
+| `1` | General     | `·`  | Current target or `note-`    |
 | `2` | Diary       | `◷`  | `diary`                      |
 | `3` | Meeting     | `○`  | `meeting-<filename>`         |
 | `4` | Description | `≡`  | `desc-<filename>`            |
+| `5` | Todo        | `□`  | Empty input                   |
 
-General, diary, meeting and description rows use dark Japanese-inspired blue,
-gold, orange and Seijaku green. Existing notes without a stored type remain
-general.
+General, diary, meeting, description and todo rows use dark Japanese-inspired
+blue, gold, orange, Seijaku green and sakura pink. Existing notes without a
+stored type remain general.
 
 Every new note starts with a small generated header before its title:
 
@@ -158,6 +161,7 @@ Open it with `Alt-o` or `:SeijakuToggle`. The default view is `all`.
 | `Tab`   | Cycle `all → directory → todo → calendar`                        |
 | `s`     | Cycle `date → updated → created` sorting in `all`                |
 | `f`     | Cycle note types in `all`; cycle `all/open/closed` in `todo`     |
+| `t`     | Jump to the first visible note for today in `all`                |
 | `/`     | Live grep the notes in the current `all` or `directory` scope    |
 | `T`     | Create a todo for the selected day in `calendar`                 |
 | `R`     | Refresh                                                          |
@@ -172,6 +176,7 @@ The green text in the top-right header is contextual: sort/filter state in
 - `updated`: sorts by the last content or metadata update.
 - `created`: groups strictly by creation day.
 - `f`: independently cycles `all`, `general`, `diary`, `meeting` and `desc`.
+- `t`: selects the first note for today in the active filter and updates the preview.
 
 Sorting and filtering combine freely. The first associated target appears on
 the right of each row. `/` searches note contents after applying the active
@@ -212,6 +217,9 @@ explicit calendar date, falling back to their creation day:
 
 Use `n` (or `a`) to create one, `Enter` to complete or reopen it, `r` to edit
 its text, `dd` to delete it and `f` to cycle `all`, `open` and `closed`.
+Todo is also option `5` in the shared item picker. Outside the calendar a new
+todo is assigned to today; from a calendar day it keeps that selected date.
+Direct todo creation and rename reuse the same transparent sakura input.
 Todos use minimal empty/filled box icons aligned with the note-icon column.
 Open items use sakura pink; closed text returns to a neutral grey and is struck
 through. Their metadata changes from `created` to `closed`, using

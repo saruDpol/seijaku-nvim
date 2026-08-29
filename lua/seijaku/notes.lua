@@ -423,6 +423,8 @@ function M.create(opts)
       require("seijaku.todos").create({
         text = title,
         calendar_date = opts.calendar_date,
+        target_path = opts.target_path,
+        target_type = opts.target_type,
         on_created = opts.on_created,
       })
       return

@@ -3,6 +3,7 @@ local M = {}
 local index = require("seijaku.index")
 local util = require("seijaku.util")
 local calendar = require("seijaku.calendar")
+local paths = require("seijaku.paths")
 
 local function normalize_text(value)
   return vim.trim(tostring(value or ""):gsub("[\r\n]+", " "))
@@ -46,6 +47,7 @@ function M.create(opts)
     end
 
     local now = util.now()
+    local target_path = opts.target_path and paths.normalize(opts.target_path) or nil
     local todo = {
       id = M.generate_id(),
       text = text,
@@ -53,6 +55,10 @@ function M.create(opts)
       updated_at = now,
       calendar_date = calendar_date,
       completed_at = nil,
+      targets = target_path and { {
+        path = target_path,
+        type = opts.target_type or paths.target_type(target_path),
+      } } or {},
     }
 
     local ok, err = index.add_todo(todo)

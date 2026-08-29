@@ -10,7 +10,7 @@ local defaults = {
     default_mode = "all",
     default_all_sort = "date",
     default_all_filter = "all",
-    default_todo_filter = "all",
+    default_todo_filter = "open",
     all_mode_limit = 500,
     debounce_ms = 150,
   },

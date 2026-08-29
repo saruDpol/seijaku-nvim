@@ -3,11 +3,22 @@ local M = {}
 function M.setup()
   local group = vim.api.nvim_create_augroup("Seijaku", { clear = true })
   local sidebar = require("seijaku.sidebar")
+  local previous_win = vim.api.nvim_get_current_win()
 
   sidebar.define_highlights()
   vim.api.nvim_create_autocmd("ColorScheme", {
     group = group,
     callback = sidebar.define_highlights,
+  })
+
+  vim.api.nvim_create_autocmd("WinEnter", {
+    group = group,
+    callback = function()
+      local entered_win = vim.api.nvim_get_current_win()
+      local from_win = previous_win
+      previous_win = entered_win
+      sidebar.redirect_calendar_entry(from_win, entered_win)
+    end,
   })
 
   vim.api.nvim_create_autocmd({ "BufEnter", "DirChanged" }, {

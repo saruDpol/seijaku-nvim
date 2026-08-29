@@ -54,6 +54,7 @@ local function empty_index()
     notes = {},
     todos = {},
     targets = {},
+    todo_targets = {},
     target_dirs = {},
   }
 end
@@ -310,12 +311,14 @@ function M.rebuild_derived_indexes()
   index.notes = index.notes or {}
   index.todos = index.todos or {}
   index.targets = {}
+  index.todo_targets = {}
   index.target_dirs = {}
 
   state.notes_by_id = index.notes
   state.todos_by_id = index.todos
   state.notes_by_file = {}
   state.note_ids_by_target = index.targets
+  state.todo_ids_by_target = index.todo_targets
   state.target_paths_by_dir = {}
 
   for _, note in pairs(index.notes) do
@@ -333,6 +336,19 @@ function M.rebuild_derived_indexes()
       if target_path then
         index.targets[target_path] = index.targets[target_path] or {}
         table.insert(index.targets[target_path], note.id)
+        target.path = target_path
+        target.type = target.type or paths.target_type(target_path)
+      end
+    end
+  end
+
+  for _, todo in pairs(index.todos) do
+    for _, target in ipairs(todo.targets or {}) do
+      local target_path = paths.normalize(target.path)
+
+      if target_path then
+        index.todo_targets[target_path] = index.todo_targets[target_path] or {}
+        table.insert(index.todo_targets[target_path], todo.id)
         target.path = target_path
         target.type = target.type or paths.target_type(target_path)
       end
@@ -357,7 +373,15 @@ function M.rebuild_derived_indexes()
     end
   end
 
+  local all_target_paths = {}
   for target_path, _ in pairs(index.targets) do
+    all_target_paths[target_path] = true
+  end
+  for target_path, _ in pairs(index.todo_targets) do
+    all_target_paths[target_path] = true
+  end
+
+  for target_path, _ in pairs(all_target_paths) do
     local normalized = paths.normalize(target_path)
     local target_type = paths.target_type(normalized)
 
@@ -698,6 +722,7 @@ function M.add_todo(todo, opts)
   state.index.todos = state.index.todos or {}
   state.index.todos[todo.id] = todo
   state.todos_by_id[todo.id] = todo
+  M.rebuild_derived_indexes()
   queue_todo_upsert(todo)
 
   if opts.defer_save then
@@ -761,6 +786,74 @@ function M.update_todo(todo)
   return true
 end
 
+function M.attach_todo(todo_id, target_path, target_type, opts)
+  opts = opts or {}
+  local todo = M.get_todo(todo_id)
+  target_path = paths.normalize(target_path)
+
+  if not todo then
+    return false, "todo not found"
+  end
+  if not target_path then
+    return false, "invalid target path"
+  end
+
+  todo.targets = todo.targets or {}
+  for _, target in ipairs(todo.targets) do
+    if target.path == target_path then
+      return true
+    end
+  end
+
+  table.insert(todo.targets, {
+    path = target_path,
+    type = target_type or paths.target_type(target_path),
+  })
+  todo.updated_at = util.now()
+  M.rebuild_derived_indexes()
+  queue_todo_upsert(todo)
+  if opts.defer_save then
+    state_mod.mark_dirty()
+  else
+    structural_save()
+  end
+  return true
+end
+
+function M.detach_todo(todo_id, target_path, opts)
+  opts = opts or {}
+  local todo = M.get_todo(todo_id)
+  target_path = paths.normalize(target_path)
+
+  if not todo or not target_path then
+    return false
+  end
+
+  local targets = {}
+  local removed = false
+  for _, target in ipairs(todo.targets or {}) do
+    if target.path == target_path then
+      removed = true
+    else
+      table.insert(targets, target)
+    end
+  end
+  if not removed then
+    return false
+  end
+
+  todo.targets = targets
+  todo.updated_at = util.now()
+  M.rebuild_derived_indexes()
+  queue_todo_upsert(todo)
+  if opts.defer_save then
+    state_mod.mark_dirty()
+  else
+    structural_save()
+  end
+  return true
+end
+
 function M.delete_todo(todo_id)
   local state = state_mod.get()
   if not M.get_todo(todo_id) then
@@ -768,6 +861,7 @@ function M.delete_todo(todo_id)
   end
   state.index.todos[todo_id] = nil
   state.todos_by_id[todo_id] = nil
+  M.rebuild_derived_indexes()
   queue_todo_delete(todo_id)
   structural_save()
   return true
@@ -1106,6 +1200,24 @@ function M.get_notes_for_target(target_path)
   return notes
 end
 
+function M.get_todos_for_target(target_path)
+  local state = state_mod.get()
+  target_path = paths.normalize(target_path)
+  local result = {}
+
+  for _, id in ipairs(state.todo_ids_by_target[target_path] or {}) do
+    local todo = state.todos_by_id[id]
+    if todo then
+      table.insert(result, todo)
+    end
+  end
+
+  table.sort(result, function(a, b)
+    return tostring(a.created_at or "") > tostring(b.created_at or "")
+  end)
+  return result
+end
+
 function M.get_notes_for_dir(dir_path)
   local state = state_mod.get()
   dir_path = paths.normalize(dir_path)
@@ -1134,6 +1246,25 @@ function M.get_notes_for_tree(dir_path)
   for target_path, _ in pairs(state.note_ids_by_target or {}) do
     if target_path == dir_path or target_path:sub(1, #prefix) == prefix then
       grouped[target_path] = M.get_notes_for_target(target_path)
+    end
+  end
+
+  return grouped
+end
+
+function M.get_todos_for_tree(dir_path)
+  local state = state_mod.get()
+  dir_path = paths.normalize(dir_path)
+  local grouped = {}
+
+  if not dir_path then
+    return grouped
+  end
+
+  local prefix = dir_path == "/" and "/" or dir_path .. "/"
+  for target_path, _ in pairs(state.todo_ids_by_target or {}) do
+    if target_path == dir_path or target_path:sub(1, #prefix) == prefix then
+      grouped[target_path] = M.get_todos_for_target(target_path)
     end
   end
 

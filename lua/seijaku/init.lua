@@ -118,9 +118,16 @@ function M.live_grep()
   return require("seijaku.search").live_grep()
 end
 
-function M.attach_path(note_id, path)
+function M.attach_path(item_id, path)
   local target_type = require("seijaku.paths").target_type(path)
-  local ok, err = index.attach(note_id, path, target_type)
+  local ok, err
+  if index.get_note(item_id) then
+    ok, err = index.attach(item_id, path, target_type)
+  elseif index.get_todo(item_id) then
+    ok, err = index.attach_todo(item_id, path, target_type)
+  else
+    ok, err = false, "item not found"
+  end
 
   if not ok then
     vim.notify("seijaku: " .. tostring(err or "failed to attach path"), vim.log.levels.ERROR)
@@ -132,8 +139,13 @@ function M.attach_path(note_id, path)
   return true
 end
 
-function M.detach_path(note_id, path)
-  local ok = index.detach(note_id, path)
+function M.detach_path(item_id, path)
+  local ok
+  if index.get_note(item_id) then
+    ok = index.detach(item_id, path)
+  elseif index.get_todo(item_id) then
+    ok = index.detach_todo(item_id, path)
+  end
 
   if not ok then
     vim.notify("seijaku: failed to detach path", vim.log.levels.ERROR)

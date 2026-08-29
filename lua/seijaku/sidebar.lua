@@ -346,6 +346,7 @@ local function apply_highlights(buf, lines, line_items)
 		rule = "SeijakuHelp",
 		help = "SeijakuHelp",
 		section = "SeijakuSection",
+		todo_section = "SeijakuTodoOpen",
 		target = "SeijakuTarget",
 		folder = "SeijakuTarget",
 		date = "SeijakuTarget",
@@ -647,8 +648,8 @@ local function wrap_text(text, width)
 	return #result > 0 and result or { "" }
 end
 
-local function todo_lines(todo)
-	local width = sidebar_width()
+local function todo_lines(todo, width)
+	width = width or sidebar_width()
 	local timestamp = todo.completed_at or todo.created_at
 	local date = tostring(timestamp or ""):match("^(%d%d%d%d%-%d%d%-%d%d)") or "unknown"
 	local metadata = (todo.completed_at and "closed " or "created ") .. date
@@ -747,8 +748,14 @@ function M.render_directory()
 	local target_paths = {}
 
 	if current_type == "directory" then
-		local grouped = index.get_notes_for_tree(current_target)
-		for target_path, _ in pairs(grouped) do
+		local target_set = {}
+		for target_path, _ in pairs(index.get_notes_for_tree(current_target)) do
+			target_set[target_path] = true
+		end
+		for target_path, _ in pairs(index.get_todos_for_tree(current_target)) do
+			target_set[target_path] = true
+		end
+		for target_path, _ in pairs(target_set) do
 			table.insert(target_paths, target_path)
 		end
 	else
@@ -756,17 +763,58 @@ function M.render_directory()
 	end
 
 	if #target_paths == 0 then
-		table.insert(lines, current_type == "file" and "No notes for this file" or "No notes for this directory")
+		table.insert(lines, current_type == "file" and "No items for this file" or "No items for this directory")
 		return lines, line_items
 	end
 
 	table.sort(target_paths)
 
 	local shown = 0
+	local function append_items(target_path, indent)
+		local target_notes = index.get_notes_for_target(target_path)
+		local target_todos = index.get_todos_for_target(target_path)
+
+		table.sort(target_notes, function(a, b)
+			return tostring(a.updated_at or "") > tostring(b.updated_at or "")
+		end)
+		for _, note in ipairs(target_notes) do
+			table.insert(lines, indent .. note_line(note))
+			line_items[#lines] = {
+				kind = "note",
+				note_id = note.id,
+				note_type = note_type(note),
+				target_path = target_path,
+			}
+		end
+
+		if #target_todos > 0 then
+			table.insert(lines, "")
+			line_items[#lines] = { kind = "spacer" }
+			table.insert(lines, indent .. "Todos")
+			line_items[#lines] = { kind = "todo_section" }
+			local available = math.max(12, sidebar_width() - display_width(indent))
+			for _, todo in ipairs(target_todos) do
+				for _, rendered in ipairs(todo_lines(todo, available)) do
+					table.insert(lines, indent .. rendered.text)
+					line_items[#lines] = {
+						kind = "todo",
+						todo_id = todo.id,
+						completed = todo.completed_at ~= nil,
+						text_end = rendered.text_end and (#indent + rendered.text_end) or nil,
+						target_path = target_path,
+					}
+				end
+			end
+		end
+
+		return #target_notes > 0 or #target_todos > 0
+	end
+
 	local function append_target(target_path, depth)
 		local target_notes = index.get_notes_for_target(target_path)
+		local target_todos = index.get_todos_for_target(target_path)
 
-		if #target_notes > 0 then
+		if #target_notes > 0 or #target_todos > 0 then
 			local target_indent = " " .. string.rep("  ", depth)
 
 			shown = shown + 1
@@ -778,19 +826,7 @@ function M.render_directory()
 				missing_target = missing_target,
 			}
 
-			table.sort(target_notes, function(a, b)
-				return tostring(a.updated_at or "") > tostring(b.updated_at or "")
-			end)
-
-			for _, note in ipairs(target_notes) do
-				table.insert(lines, target_indent .. "  " .. note_line(note))
-				line_items[#lines] = {
-					kind = "note",
-					note_id = note.id,
-					note_type = note_type(note),
-					target_path = target_path,
-				}
-			end
+			append_items(target_path, target_indent .. "  ")
 		end
 	end
 
@@ -823,26 +859,9 @@ function M.render_directory()
 			end
 		end
 
-		local function append_notes(target_path, indent)
-			local target_notes = index.get_notes_for_target(target_path)
-			table.sort(target_notes, function(a, b)
-				return tostring(a.updated_at or "") > tostring(b.updated_at or "")
-			end)
-
-			for _, note in ipairs(target_notes) do
-				table.insert(lines, indent .. note_line(note))
-				line_items[#lines] = {
-					kind = "note",
-					note_id = note.id,
-					note_type = note_type(note),
-					target_path = target_path,
-				}
-			end
-		end
-
 		if tree.target_path then
 			shown = shown + 1
-			append_notes(tree.target_path, " ")
+			append_items(tree.target_path, " ")
 		end
 
 		local function render_nodes(node, depth)
@@ -862,7 +881,7 @@ function M.render_directory()
 
 				if child.target_path then
 					shown = shown + 1
-					append_notes(child.target_path, indent .. "  ")
+					append_items(child.target_path, indent .. "  ")
 				end
 
 				render_nodes(child, depth + 1)
@@ -873,7 +892,7 @@ function M.render_directory()
 	end
 
 	if shown == 0 then
-		table.insert(lines, current_type == "directory" and "No notes for this directory" or "No notes for this file")
+		table.insert(lines, current_type == "directory" and "No items for this directory" or "No items for this file")
 	end
 
 	return lines, line_items
@@ -1125,6 +1144,43 @@ function M.reconcile_note_windows()
 		activate_standalone_layout()
 	end
 	rebalance_normal_layout()
+end
+
+function M.redirect_calendar_entry(from_win, entered_win)
+	local sidebar = sidebar_state()
+	if not sidebar.open or sidebar.mode ~= "calendar" or entered_win ~= sidebar.win then
+		return false
+	end
+	if not is_valid_win(sidebar.calendar_notes_win) then
+		return false
+	end
+	if from_win and managed_window_set()[from_win] then
+		return false
+	end
+
+	local has_items = false
+	for _, item in pairs(sidebar.calendar_notes_items or {}) do
+		if item.kind == "note" or item.kind == "todo" then
+			has_items = true
+			break
+		end
+	end
+	if not has_items then
+		return false
+	end
+
+	vim.schedule(function()
+		local current = sidebar_state()
+		if current.open
+			and current.mode == "calendar"
+			and is_valid_win(current.win)
+			and vim.api.nvim_get_current_win() == current.win
+			and is_valid_win(current.calendar_notes_win)
+		then
+			vim.api.nvim_set_current_win(current.calendar_notes_win)
+		end
+	end)
+	return true
 end
 
 local function close_calendar_notes_window()
@@ -1554,7 +1610,9 @@ function M.open()
 	end
 	rebalance_normal_layout()
 
-	if is_valid_win(current_win) then
+	if sidebar.mode == "calendar" and is_valid_win(sidebar.calendar_notes_win) then
+		vim.api.nvim_set_current_win(sidebar.calendar_notes_win)
+	elseif is_valid_win(current_win) then
 		vim.api.nvim_set_current_win(current_win)
 	end
 end
@@ -1972,18 +2030,23 @@ end
 function M.handle_detach_current()
 	local item = selected_item()
 
-	if not item or item.kind ~= "note" then
+	if not item or (item.kind ~= "note" and item.kind ~= "todo") then
 		return
 	end
 
 	local ctx = context.get_association_target()
 	local target_path = item.target_path or (ctx and ctx.target_path) or nil
 	if not target_path then
-		vim.notify("seijaku: no target to detach from this note", vim.log.levels.WARN)
+		vim.notify("seijaku: no target to detach from this item", vim.log.levels.WARN)
 		return
 	end
 
-	local ok = index.detach(item.note_id, target_path)
+	local ok
+	if item.kind == "todo" then
+		ok = index.detach_todo(item.todo_id, target_path)
+	else
+		ok = index.detach(item.note_id, target_path)
+	end
 	if not ok then
 		vim.notify("seijaku: failed to detach path", vim.log.levels.ERROR)
 		return

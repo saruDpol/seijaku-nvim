@@ -184,9 +184,10 @@ type filter, so `filter meeting` searches only meeting notes.
 
 ### directory
 
-For a file, the view shows notes attached exactly to that file. For a directory,
-Oil buffer or netrw buffer, it renders a filtered recursive tree containing
-annotated paths and the intermediate directories needed to reach them.
+For a file, the view shows notes and todos attached exactly to that file. For a
+directory, Oil buffer or netrw buffer, it renders a filtered recursive tree
+containing annotated paths and the intermediate directories needed to reach
+them. Associated tasks live in a `Todos` subsection under their target.
 
 In Oil and local netrw, the entry under the cursor is used for association
 actions; the view itself continues to represent the open directory and its
@@ -198,7 +199,7 @@ directory and its descendants. Search is deliberately unavailable in calendar
 mode. It requires `telescope.nvim` and `rg`; selecting a match opens the note in
 Seijaku's managed preview and jumps to the matching line.
 
-Deleting or moving a target never deletes its notes. The stored association is
+Deleting or moving a target never deletes its notes or todos. The stored association is
 kept at the old path and rendered with a warning-colored `!` in `all`,
 `directory` and `calendar`. Automatic relinking is intentionally left to the
 user for now, because a new path cannot be inferred safely in every case.
@@ -217,6 +218,7 @@ explicit calendar date, falling back to their creation day:
 
 Use `n` (or `a`) to create one, `Enter` to complete or reopen it, `r` to edit
 its text, `dd` to delete it and `f` to cycle `all`, `open` and `closed`.
+The initial filter is `open`, so completed tasks stay hidden until requested.
 Todo is also option `5` in the shared item picker. Outside the calendar a new
 todo is assigned to today; from a calendar day it keeps that selected date.
 Direct todo creation and rename reuse the same transparent sakura input.
@@ -247,7 +249,9 @@ renders a fixed six-week grid; shorter months leave trailing cells empty, so
 changing month never resizes the panel. `T` creates a todo for the selected day. `Enter` toggles a selected
 todo; selecting one never changes the preview. Moving through day notes updates
 the managed preview. A day without a previewable note keeps the current preview
-and layout unchanged.
+and layout unchanged. When the sidebar opens while calendar is the active mode,
+or the calendar column is entered from an external split, focus starts in the
+day-item list when it contains items. Empty days keep focus in the month grid.
 
 Notes created here receive an explicit `calendar_date`. Notes without one
 appear on their creation day; `x` clears an explicit date and restores that
@@ -304,8 +308,8 @@ calendar never consumes existing standalone note columns.
 :SeijakuTodo
 :SeijakuNewForCurrent
 :SeijakuNewForPath {path}
-:SeijakuAttachPath {note_id} {path}
-:SeijakuDetachPath {note_id} {path}
+:SeijakuAttachPath {item_id} {path}
+:SeijakuDetachPath {item_id} {path}
 :SeijakuOpen {note_id}
 :SeijakuList
 :SeijakuRebuildIndex
@@ -343,7 +347,7 @@ require("seijaku").setup({
     default_mode = "all",
     default_all_sort = "date",
     default_all_filter = "all",
-    default_todo_filter = "all",
+    default_todo_filter = "open",
     all_mode_limit = 500,
     debounce_ms = 150,
   },
@@ -398,8 +402,8 @@ Neovim process.
 
 - Notes are ordinary Markdown files.
 - IDs are independent from filesystem paths.
-- A note can target many paths; a path can have many notes.
-- Notes can remain global without any target.
+- A note or todo can target many paths; a path can have many items.
+- Notes and todos can remain global without any target.
 
 ## License
 

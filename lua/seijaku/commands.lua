@@ -54,7 +54,7 @@ function M.setup()
 
   vim.api.nvim_create_user_command("SeijakuAttachPath", function(args)
     if #args.fargs < 2 then
-      vim.notify("seijaku: usage :SeijakuAttachPath <note_id> <path>", vim.log.levels.ERROR)
+      vim.notify("seijaku: usage :SeijakuAttachPath <item_id> <path>", vim.log.levels.ERROR)
       return
     end
 
@@ -69,6 +69,9 @@ function M.setup()
         for _, note in ipairs(require("seijaku.index").list_notes()) do
           table.insert(items, note.id)
         end
+        for _, todo in ipairs(require("seijaku.index").list_todos()) do
+          table.insert(items, todo.id)
+        end
         return items
       end
 
@@ -78,7 +81,7 @@ function M.setup()
 
   vim.api.nvim_create_user_command("SeijakuDetachPath", function(args)
     if #args.fargs < 2 then
-      vim.notify("seijaku: usage :SeijakuDetachPath <note_id> <path>", vim.log.levels.ERROR)
+      vim.notify("seijaku: usage :SeijakuDetachPath <item_id> <path>", vim.log.levels.ERROR)
       return
     end
 
@@ -92,6 +95,9 @@ function M.setup()
         local items = {}
         for _, note in ipairs(require("seijaku.index").list_notes()) do
           table.insert(items, note.id)
+        end
+        for _, todo in ipairs(require("seijaku.index").list_todos()) do
+          table.insert(items, todo.id)
         end
         return items
       end

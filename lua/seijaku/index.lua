@@ -11,8 +11,29 @@ local pending_upserts = {}
 local pending_deletes = {}
 local pending_todo_upserts = {}
 local pending_todo_deletes = {}
+local pending_tag_colors = {}
 local last_index_raw = nil
 local note_query_cache = {}
+
+local tag_palette = {
+  "#795548", "#66558a", "#3e6d78", "#5f7848", "#926449", "#875770",
+  "#466b8a", "#857245", "#6d596b", "#49766a", "#805b4c", "#586888",
+}
+
+local function valid_tag_color(color)
+  return type(color) == "string" and color:match("^#%x%x%x%x%x%x$") ~= nil
+end
+
+local function assign_tag_color(index, tag)
+  index.tag_colors = index.tag_colors or {}
+  if valid_tag_color(index.tag_colors[tag]) then
+    return false
+  end
+  local color = tag_palette[math.random(#tag_palette)]
+  index.tag_colors[tag] = color
+  pending_tag_colors[tag] = color
+  return true
+end
 
 local function invalidate_note_queries()
   note_query_cache = {}
@@ -48,11 +69,12 @@ end
 
 local function empty_index()
   return {
-    version = 2,
+    version = 3,
     created_at = util.now(),
     updated_at = util.now(),
     notes = {},
     todos = {},
+    tag_colors = {},
     targets = {},
     todo_targets = {},
     target_dirs = {},
@@ -80,7 +102,8 @@ local function read_index_file(state)
 
   decoded.notes = decoded.notes or {}
   decoded.todos = decoded.todos or {}
-  decoded.version = math.max(tonumber(decoded.version) or 1, 2)
+  decoded.tag_colors = decoded.tag_colors or {}
+  decoded.version = math.max(tonumber(decoded.version) or 1, 3)
   return decoded, raw
 end
 
@@ -131,6 +154,10 @@ local function apply_pending(index)
   for todo_id, todo in pairs(pending_todo_upserts) do
     index.todos[todo_id] = vim.deepcopy(todo)
   end
+  index.tag_colors = index.tag_colors or {}
+  for tag, color in pairs(pending_tag_colors) do
+    index.tag_colors[tag] = color
+  end
   return index
 end
 
@@ -139,6 +166,7 @@ local function clear_pending()
   pending_deletes = {}
   pending_todo_upserts = {}
   pending_todo_deletes = {}
+  pending_tag_colors = {}
 end
 
 local function has_pending()
@@ -146,6 +174,7 @@ local function has_pending()
     or next(pending_deletes) ~= nil
     or next(pending_todo_upserts) ~= nil
     or next(pending_todo_deletes) ~= nil
+    or next(pending_tag_colors) ~= nil
 end
 
 local function acquire_index_lock(state)
@@ -190,6 +219,7 @@ end
 local function parse_note_metadata(lines)
   local metadata = {
     targets = {},
+    tags = {},
   }
   local in_block = false
 
@@ -226,6 +256,18 @@ local function parse_note_metadata(lines)
       if calendar_date then
         metadata.calendar_date = calendar_date
       end
+
+      local tags = line:match("^> Tags:%s*(.+)$")
+      if tags then
+        for tag in tags:gmatch("`([^`]+)`") do
+          table.insert(metadata.tags, tag)
+        end
+      end
+
+      local pinned = line:match("^> Pinned:%s*`([^`]+)`")
+      if pinned then
+        metadata.pinned = pinned == "true"
+      end
     end
   end
 
@@ -260,7 +302,8 @@ local function note_from_file(state, rel_path)
     note_type = metadata.note_type or "general",
     calendar_date = metadata.calendar_date,
     targets = metadata.targets or {},
-    tags = {},
+    tags = metadata.tags or {},
+    pinned = metadata.pinned == true,
   }
 end
 
@@ -300,6 +343,10 @@ function M.load()
   state.index = apply_pending(decoded)
   last_index_raw = raw
   M.rebuild_derived_indexes()
+  if next(pending_tag_colors) ~= nil then
+    state_mod.mark_dirty()
+    M.schedule_save()
+  end
   return true
 end
 
@@ -310,6 +357,7 @@ function M.rebuild_derived_indexes()
   invalidate_note_queries()
   index.notes = index.notes or {}
   index.todos = index.todos or {}
+  index.tag_colors = index.tag_colors or {}
   index.targets = {}
   index.todo_targets = {}
   index.target_dirs = {}
@@ -320,8 +368,41 @@ function M.rebuild_derived_indexes()
   state.note_ids_by_target = index.targets
   state.todo_ids_by_target = index.todo_targets
   state.target_paths_by_dir = {}
+  state.note_ids_by_date = {}
+  state.todo_ids_by_date = {}
+  state.calendar_counts_by_month = {}
+
+  local function add_date_item(collection, date, id)
+    if not date or not id then
+      return
+    end
+    collection[date] = collection[date] or {}
+    table.insert(collection[date], id)
+    local month = date:match("^(%d%d%d%d%-%d%d)")
+    if month then
+      state.calendar_counts_by_month[month] = state.calendar_counts_by_month[month] or {}
+      local counts = state.calendar_counts_by_month[month]
+      counts[date] = (counts[date] or 0) + 1
+    end
+  end
 
   for _, note in pairs(index.notes) do
+    local tags = {}
+    local seen_tags = {}
+    for _, value in ipairs(note.tags or {}) do
+      local tag = vim.trim(tostring(value)):lower()
+      if tag ~= "" and not seen_tags[tag] then
+        seen_tags[tag] = true
+        table.insert(tags, tag)
+      end
+    end
+    table.sort(tags)
+    note.tags = tags
+    for _, tag in ipairs(tags) do
+      assign_tag_color(index, tag)
+    end
+    note.pinned = note.pinned == true
+    add_date_item(state.note_ids_by_date, M.calendar_date(note), note.id)
     if note.file then
       local abs_note_path = paths.normalize(paths.join(state.vault_dir, note.file))
 
@@ -343,6 +424,8 @@ function M.rebuild_derived_indexes()
   end
 
   for _, todo in pairs(index.todos) do
+    todo.pinned = todo.pinned == true
+    add_date_item(state.todo_ids_by_date, M.todo_date(todo), todo.id)
     for _, target in ipairs(todo.targets or {}) do
       local target_path = paths.normalize(target.path)
 
@@ -497,6 +580,14 @@ function M.reload_if_changed()
   state.index = apply_pending(latest)
   last_index_raw = raw
   M.rebuild_derived_indexes()
+  local ok_notes, notes = pcall(require, "seijaku.notes")
+  if ok_notes and type(notes.define_tag_highlights) == "function" then
+    notes.define_tag_highlights()
+  end
+  if next(pending_tag_colors) ~= nil then
+    state_mod.mark_dirty()
+    M.schedule_save()
+  end
   pcall(vim.cmd, "silent! checktime")
   refresh_sidebar_after_reload()
   return true
@@ -588,6 +679,7 @@ function M.add_note(note, opts)
   invalidate_note_queries()
   index.notes[note.id] = note
   state.notes_by_id[note.id] = note
+  M.rebuild_derived_indexes()
 
   if note.file then
     local abs_note_path = paths.normalize(paths.join(state.vault_dir, note.file))
@@ -639,8 +731,21 @@ local function normalized_note_type(note)
 end
 
 local function note_comparator(sort)
+  local function pinned_first(a, b)
+    local a_pinned = a and a.pinned == true
+    local b_pinned = b and b.pinned == true
+    if a_pinned ~= b_pinned then
+      return a_pinned
+    end
+    return nil
+  end
+
   if sort == "date" then
     return function(a, b)
+      local pinned = pinned_first(a, b)
+      if pinned ~= nil then
+        return pinned
+      end
       local a_date = tostring(M.calendar_date(a) or "")
       local b_date = tostring(M.calendar_date(b) or "")
       if a_date ~= b_date then
@@ -658,6 +763,10 @@ local function note_comparator(sort)
 
   if sort == "created" then
     return function(a, b)
+      local pinned = pinned_first(a, b)
+      if pinned ~= nil then
+        return pinned
+      end
       local a_created = tostring(a.created_at or "")
       local b_created = tostring(b.created_at or "")
       if a_created ~= b_created then
@@ -668,6 +777,10 @@ local function note_comparator(sort)
   end
 
   return function(a, b)
+    local pinned = pinned_first(a, b)
+    if pinned ~= nil then
+      return pinned
+    end
     local a_updated = tostring(a.updated_at or "")
     local b_updated = tostring(b.updated_at or "")
     if a_updated ~= b_updated then
@@ -684,7 +797,8 @@ function M.query_notes(opts)
     sort = "updated"
   end
   local filter = opts.filter or "all"
-  local cache_key = sort .. "\0" .. filter
+  local tag = opts.tag or "all"
+  local cache_key = sort .. "\0" .. filter .. "\0" .. tag
   local cached = note_query_cache[cache_key]
   if cached then
     return cached
@@ -693,7 +807,9 @@ function M.query_notes(opts)
   local result = {}
 
   for _, note in pairs(state_mod.get().notes_by_id or {}) do
-    if filter == "all" or normalized_note_type(note) == filter then
+    local type_matches = filter == "all" or normalized_note_type(note) == filter
+    local tag_matches = tag == "all" or vim.tbl_contains(note.tags or {}, tag)
+    if type_matches and tag_matches then
       table.insert(result, note)
     end
   end
@@ -719,6 +835,7 @@ function M.add_todo(todo, opts)
   end
 
   local state = state_mod.get()
+  todo.pinned = todo.pinned == true
   state.index.todos = state.index.todos or {}
   state.index.todos[todo.id] = todo
   state.todos_by_id[todo.id] = todo
@@ -744,6 +861,9 @@ function M.list_todos()
   end
 
   table.sort(result, function(a, b)
+    if (a.pinned == true) ~= (b.pinned == true) then
+      return a.pinned == true
+    end
     local a_date = M.todo_date(a) or ""
     local b_date = M.todo_date(b) or ""
     if a_date ~= b_date then
@@ -763,13 +883,18 @@ end
 
 function M.get_todos_for_calendar_date(date)
   local result = {}
-  for _, todo in pairs(state_mod.get().todos_by_id or {}) do
-    if M.todo_date(todo) == date then
+  local state = state_mod.get()
+  for _, id in ipairs(state.todo_ids_by_date[date] or {}) do
+    local todo = state.todos_by_id[id]
+    if todo then
       table.insert(result, todo)
     end
   end
 
   table.sort(result, function(a, b)
+    if (a.pinned == true) ~= (b.pinned == true) then
+      return a.pinned == true
+    end
     return tostring(a.created_at or "") > tostring(b.created_at or "")
   end)
   return result
@@ -784,6 +909,20 @@ function M.update_todo(todo)
   queue_todo_upsert(todo)
   structural_save()
   return true
+end
+
+function M.toggle_todo_pin(todo_id)
+  local todo = M.get_todo(todo_id)
+  if not todo then
+    return false, "todo not found"
+  end
+  todo.pinned = not (todo.pinned == true)
+  todo.updated_at = util.now()
+  local ok, err = M.update_todo(todo)
+  if not ok then
+    return false, err
+  end
+  return true, todo.pinned
 end
 
 function M.attach_todo(todo_id, target_path, target_type, opts)
@@ -877,14 +1016,18 @@ end
 
 function M.get_notes_for_calendar_date(date)
   local result = {}
-
-  for _, note in pairs(state_mod.get().notes_by_id or {}) do
-    if M.calendar_date(note) == date then
+  local state = state_mod.get()
+  for _, id in ipairs(state.note_ids_by_date[date] or {}) do
+    local note = state.notes_by_id[id]
+    if note then
       table.insert(result, note)
     end
   end
 
   table.sort(result, function(a, b)
+    if (a.pinned == true) ~= (b.pinned == true) then
+      return a.pinned == true
+    end
     return tostring(a.updated_at or "") > tostring(b.updated_at or "")
   end)
 
@@ -892,23 +1035,11 @@ function M.get_notes_for_calendar_date(date)
 end
 
 function M.get_calendar_counts(year, month)
-  local prefix = string.format("%04d-%02d-", year, month)
+  local key = string.format("%04d-%02d", year, month)
   local counts = {}
-
-  for _, note in pairs(state_mod.get().notes_by_id or {}) do
-    local date = M.calendar_date(note)
-    if date and date:sub(1, #prefix) == prefix then
-      counts[date] = (counts[date] or 0) + 1
-    end
+  for date, count in pairs(state_mod.get().calendar_counts_by_month[key] or {}) do
+    counts[date] = count
   end
-
-  for _, todo in pairs(state_mod.get().todos_by_id or {}) do
-    local date = M.todo_date(todo)
-    if date and date:sub(1, #prefix) == prefix then
-      counts[date] = (counts[date] or 0) + 1
-    end
-  end
-
   return counts
 end
 
@@ -926,7 +1057,7 @@ function M.set_calendar_date(note_id, date)
 
   note.calendar_date = date
   note.updated_at = util.now()
-  invalidate_note_queries()
+  M.rebuild_derived_indexes()
   if state.index and state.index.notes then
     state.index.notes[note_id] = note
   end
@@ -935,6 +1066,69 @@ function M.set_calendar_date(note_id, date)
   sync_note_metadata(note)
 
   return true
+end
+
+function M.list_tags()
+  local seen = {}
+  local result = {}
+  for _, note in pairs(state_mod.get().notes_by_id or {}) do
+    for _, tag in ipairs(note.tags or {}) do
+      if tag ~= "" and not seen[tag] then
+        seen[tag] = true
+        table.insert(result, tag)
+      end
+    end
+  end
+  table.sort(result)
+  return result
+end
+
+function M.get_tag_color(tag)
+  local colors = state_mod.get().index and state_mod.get().index.tag_colors or {}
+  local color = colors and colors[tag]
+  return valid_tag_color(color) and color or nil
+end
+
+function M.set_tags(note_id, tags)
+  local note = M.get_note(note_id)
+  if not note then
+    return false, "note not found"
+  end
+
+  local normalized = {}
+  local seen = {}
+  for _, value in ipairs(tags or {}) do
+    local tag = vim.trim(tostring(value)):lower()
+    if tag:find("[`,%c]") then
+      return false, "tags cannot contain commas, backticks or control characters"
+    end
+    if tag ~= "" and not seen[tag] then
+      seen[tag] = true
+      table.insert(normalized, tag)
+    end
+  end
+  table.sort(normalized)
+  note.tags = normalized
+  local current_index = state_mod.get().index
+  for _, tag in ipairs(normalized) do
+    assign_tag_color(current_index, tag)
+  end
+  note.updated_at = util.now()
+  M.mark_dirty_sync(note)
+  sync_note_metadata(note)
+  return true
+end
+
+function M.toggle_pin(note_id)
+  local note = M.get_note(note_id)
+  if not note then
+    return false, "note not found"
+  end
+  note.pinned = not (note.pinned == true)
+  note.updated_at = util.now()
+  M.mark_dirty_sync(note)
+  sync_note_metadata(note)
+  return true, note.pinned
 end
 
 function M.attach(note_id, target_path, target_type, opts)

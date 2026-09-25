@@ -26,6 +26,7 @@ files—no database, web view or proprietary format.
 - Notes attach to any file or directory, including images, video and office
   documents.
 - Four note types with independent color, icon and filtering.
+- Configurable dark-aware palette, tags and pinned notes.
 - Calendar scheduling independent from creation and modification dates.
 - Dynamic preview plus additional managed note splits.
 - Adaptive docked and standalone layouts.
@@ -137,6 +138,8 @@ Every new note starts with a small generated header before its title:
 > Updated: `2026-07-16T18:30:00`
 > Target: `/project/api.lua`
 > Date: `2026-07-18`
+> Tags: `work`, `project-x`
+> Pinned: `true`
 
 <!-- seijaku:metadata:end -->
 
@@ -144,7 +147,22 @@ Every new note starts with a small generated header before its title:
 ```
 
 The header stays synchronized when metadata changes. `index.json` remains the
-source of truth; Seijaku does not parse Markdown to rebuild operational state.
+source of truth during normal operation; reconciliation can recover type,
+dates, targets, tags and pin state from a Markdown file.
+
+New notes can receive a template per type. Templates are ordinary lines (or a
+callback returning lines) and support `{title}`, `{type}`, `{date}`,
+`{calendar_date}`, `{target}` and `{target_name}` placeholders. Generated
+metadata starts folded in Seijaku-managed note windows; use normal fold commands
+such as `za`, or `:SeijakuToggleMetadata`, to reveal it. The fold stays closed
+after saves and shows the associated filename (or note title), type, pin and
+tags in one compact line. Tags appear as colored chips; the remaining fold has
+a transparent background.
+
+Tag colors are assigned when a tag is first used and stored in the vault's
+`index.json` under `tag_colors`. You can edit a color there manually using a
+six-digit hex value, for example `"work": "#49766a"`. Seijaku picks up external
+index changes automatically.
 
 ## ⌁ Sidebar
 
@@ -161,6 +179,10 @@ Open it with `Alt-o` or `:SeijakuToggle`. The default view is `all`.
 | `Tab`   | Cycle `all → directory → todo → calendar`                        |
 | `s`     | Cycle `date → updated → created` sorting in `all`                |
 | `f`     | Cycle note types in `all`; cycle `all/open/closed` in `todo`     |
+| `F`     | Cycle the independent tag filter in `all`                        |
+| `#`     | Edit tags on the selected note in a popup                        |
+| `p`     | Pin or unpin the selected note or todo                           |
+| `o`     | Open the selected item's associated target in Oil               |
 | `t`     | Jump to the first visible note for today in `all`                |
 | `/`     | Live grep the notes in the current `all` or `directory` scope    |
 | `T`     | Create a todo for the selected day in `calendar`                 |
@@ -176,23 +198,38 @@ The green text in the top-right header is contextual: sort/filter state in
 - `updated`: sorts by the last content or metadata update.
 - `created`: groups strictly by creation day.
 - `f`: independently cycles `all`, `general`, `diary`, `meeting` and `desc`.
-- `t`: selects the first note for today in the active filter and updates the preview.
+- `F`: cycles through `all tags` and the tags currently in the vault.
+- `p`: pins a note or todo above the regular result set without changing sort/filter state.
+- `t`: selects the first note for today in the active filters and updates the preview.
 
-Sorting and filtering combine freely. The first associated target appears on
-the right of each row. `/` searches note contents after applying the active
-type filter, so `filter meeting` searches only meeting notes.
+Sorting, type filtering and tag filtering combine freely. The header shows the
+controls as `sort (s) … | filter (f) … | tag (F) …`, with only their current
+values emphasized. The unfiltered `all` view includes todos alongside notes;
+note-type or tag filters narrow the result to notes. The first associated target
+appears on the right of each row. `/` searches note contents after applying both
+active filters, so `meeting + #work` searches only matching meeting notes.
+Pinned rows use `›`, tagged rows use a filled square, and both markers occupy reserved
+columns before the note-type icon.
+Press `#` on a note to manage tags in a transparent native popup: `j/k` moves,
+`Enter` toggles a tag, `a` adds one, `Esc` saves and exits, and `q` cancels.
+Date groups in `all` and `todo` have subtle dividers; inactive tabs and dates
+use a quieter grey without italics.
 
 ### directory
 
 For a file, the view shows notes and todos attached exactly to that file. For a
 directory, Oil buffer or netrw buffer, it renders a filtered recursive tree
 containing annotated paths and the intermediate directories needed to reach
-them. Associated tasks live in a `Todos` subsection under their target.
+them. Associated tasks appear first under `Todos`, followed by notes. The
+`Notes` heading is shown when both kinds are present.
 
 In Oil and local netrw, the entry under the cursor is used for association
 actions; the view itself continues to represent the open directory and its
 descendants. Any real filesystem file is a valid target regardless of extension
 or file type. Remote netrw URLs are intentionally not treated as local targets.
+Press `o` on an associated note or todo to open its target through Oil: a
+directory opens directly, and a file opens its parent with the file selected.
+Missing targets remain associated but cannot be opened.
 
 `/` searches only notes attached to the current file, or to the current
 directory and its descendants. Search is deliberately unavailable in calendar
@@ -217,9 +254,10 @@ explicit calendar date, falling back to their creation day:
 ```
 
 Use `n` (or `a`) to create one, `Enter` to complete or reopen it, `r` to edit
-its text, `dd` to delete it and `f` to cycle `all`, `open` and `closed`.
+its text, `dd` to delete it, `p` to pin it and `f` to cycle `all`, `open` and `closed`.
 The initial filter is `open`, so completed tasks stay hidden until requested.
-Todo is also option `5` in the shared item picker. Outside the calendar a new
+Todo is also option `5` in the shared item picker. Pin state is shared with
+`all`, `directory` and the calendar day list. Outside the calendar a new
 todo is assigned to today; from a calendar day it keeps that selected date.
 Direct todo creation and rename reuse the same transparent sakura input.
 Todos use minimal empty/filled box icons aligned with the note-icon column.
@@ -242,12 +280,14 @@ notes are marked.
 | `[/]`        | Previous/next month                  |
 | `gg/G`       | First/last day of the month          |
 | `t`          | Today                                |
+| `0`–`9`      | Type a day number and jump to it     |
 | `Enter`      | Focus the items for the selected day |
 
 Calendar and day items are separate navigable windows. The calendar always
 renders a fixed six-week grid; shorter months leave trailing cells empty, so
 changing month never resizes the panel. `T` creates a todo for the selected day. `Enter` toggles a selected
-todo; selecting one never changes the preview. Moving through day notes updates
+todo; selecting one never changes the preview. `Enter` on a day note opens an
+additional managed note split while keeping the dynamic preview. Moving through day notes updates
 the managed preview. A day without a previewable note keeps the current preview
 and layout unchanged. When the sidebar opens while calendar is the active mode,
 or the calendar column is entered from an external split, focus starts in the
@@ -255,7 +295,9 @@ day-item list when it contains items. Empty days keep focus in the month grid.
 
 Notes created here receive an explicit `calendar_date`. Notes without one
 appear on their creation day; `x` clears an explicit date and restores that
-fallback.
+fallback. One-digit days `4`–`9` apply immediately; `0`–`3` briefly wait for a
+second digit, so both `7` and `18` work naturally. `Enter` confirms a pending
+digit and `Esc` cancels it. Invalid days leave the current selection unchanged.
 
 ## ▦ Layouts
 
@@ -315,6 +357,7 @@ calendar never consumes existing standalone note columns.
 :SeijakuRebuildIndex
 :SeijakuReconcile
 :SeijakuGrep
+:SeijakuToggleMetadata
 ```
 
 `:SeijakuReconcile` compares `notes/` with `index.json`: it imports orphaned
@@ -356,6 +399,30 @@ require("seijaku").setup({
     wrap = true,
     linebreak = true,
     breakindent = true,
+    fold_metadata = true,
+  },
+  appearance = {
+    palette = "auto", -- vivid on dark backgrounds, muted on light ones
+    colors = {
+      -- general = "#4f9fbc", -- override any semantic color
+      -- diary = "#d0a02b",
+      -- meeting = "#d1663a",
+      -- description = "#75a663",
+      -- todo = "#d9789c",
+      -- brand = "#88ac76",
+      -- active = "#cc5555",
+    },
+  },
+  notes = {
+    templates = {
+      general = {},
+      diary = { "## Entry", "" },
+      meeting = {
+        "## Attendees", "", "## Agenda", "",
+        "## Notes", "", "## Actions", "",
+      },
+      desc = { "## Description", "", "## Context", "" },
+    },
   },
   keymaps = {
     enable_default = true,
@@ -379,7 +446,8 @@ require("seijaku").setup({
 
 Wrapping is window-local and visual: long Markdown lines continue on screen
 without inserting newline characters or affecting Markdown buffers outside
-Seijaku.
+Seijaku. `appearance.palette` accepts `auto`, `vivid` or `muted`; every semantic
+color can be replaced independently without changing renderer code.
 
 Instances sharing a vault watch atomic replacements of `index.json`. External
 changes are reloaded after a short debounce and refresh an open sidebar. Writes
@@ -404,6 +472,9 @@ Neovim process.
 - IDs are independent from filesystem paths.
 - A note or todo can target many paths; a path can have many items.
 - Notes and todos can remain global without any target.
+- Tags and pin state are stored in the index and mirrored in note metadata.
+- Calendar lookups use in-memory indexes by date and month rather than scanning
+  every note and todo on each movement.
 
 ## License
 

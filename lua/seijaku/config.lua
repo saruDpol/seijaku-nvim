@@ -20,6 +20,26 @@ local defaults = {
     wrap = true,
     linebreak = true,
     breakindent = true,
+    fold_metadata = true,
+  },
+
+  appearance = {
+    palette = "auto",
+    colors = {},
+  },
+
+  notes = {
+    templates = {
+      general = {},
+      diary = { "## Entry", "" },
+      meeting = {
+        "## Attendees", "",
+        "## Agenda", "",
+        "## Notes", "",
+        "## Actions", "",
+      },
+      desc = { "## Description", "", "## Context", "" },
+    },
   },
 
   keymaps = {

@@ -37,8 +37,13 @@ function M.notes_for_current_scope()
 
   if sidebar.mode == "all" then
     local filter = valid_note_types[sidebar.all_filter] and sidebar.all_filter or "all"
-    local notes = index.query_notes({ sort = "updated", filter = filter })
-    return notes, filter == "all" and "all notes" or (filter .. " notes")
+    local tag = sidebar.all_tag or "all"
+    local notes = index.query_notes({ sort = "updated", filter = filter, tag = tag })
+    local label = filter == "all" and "all notes" or (filter .. " notes")
+    if tag ~= "all" then
+      label = label .. " · #" .. tag
+    end
+    return notes, label
   end
 
   local ctx = require("seijaku.context").get_current()

@@ -55,6 +55,7 @@ function M.create(opts)
       updated_at = now,
       calendar_date = calendar_date,
       completed_at = nil,
+      pinned = false,
       targets = target_path and { {
         path = target_path,
         type = opts.target_type or paths.target_type(target_path),

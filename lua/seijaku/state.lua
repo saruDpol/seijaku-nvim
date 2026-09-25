@@ -18,6 +18,9 @@ local state = {
   note_ids_by_target = {},
   todo_ids_by_target = {},
   target_paths_by_dir = {},
+  note_ids_by_date = {},
+  todo_ids_by_date = {},
+  calendar_counts_by_month = {},
 
   context = {
     last = nil,
@@ -36,6 +39,7 @@ local state = {
     mode = "all",
     all_sort = "date",
     all_filter = "all",
+    all_tag = "all",
     todo_filter = "open",
     layout_mode = "docked",
     standalone_host_win = nil,
@@ -55,6 +59,7 @@ local state = {
     calendar_notes_buf = nil,
     calendar_notes_lines = {},
     calendar_notes_items = {},
+    calendar_day_input = "",
   },
 }
 
@@ -75,6 +80,7 @@ function M.setup(config)
   end
   state.sidebar.all_sort = config.sidebar.default_all_sort or "date"
   state.sidebar.all_filter = config.sidebar.default_all_filter or "all"
+  state.sidebar.all_tag = "all"
   state.sidebar.todo_filter = config.sidebar.default_todo_filter or "open"
   state.sidebar.layout_mode = "docked"
   state.sidebar.standalone_host_win = nil
@@ -94,6 +100,7 @@ function M.setup(config)
   state.sidebar.calendar_notes_buf = nil
   state.sidebar.calendar_notes_lines = {}
   state.sidebar.calendar_notes_items = {}
+  state.sidebar.calendar_day_input = ""
   state.context.last = nil
   state.context.association = nil
 end

@@ -17,7 +17,7 @@ function M.setup()
       local entered_win = vim.api.nvim_get_current_win()
       local from_win = previous_win
       previous_win = entered_win
-      sidebar.redirect_calendar_entry(from_win, entered_win)
+      sidebar.redirect_sidebar_entry(from_win, entered_win)
     end,
   })
 

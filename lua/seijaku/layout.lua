@@ -16,7 +16,14 @@ end
 
 function M.managed_windows(sidebar)
   local result = {}
-  for _, win in ipairs({ sidebar.win, sidebar.preview_win, sidebar.calendar_notes_win }) do
+  for _, win in ipairs({
+    sidebar.win,
+    sidebar.header_win,
+    sidebar.notebook_win,
+    sidebar.tag_win,
+    sidebar.preview_win,
+    sidebar.calendar_notes_win,
+  }) do
     if M.is_valid_win(win) then
       result[win] = true
     end
@@ -36,7 +43,19 @@ function M.external_windows(sidebar)
 end
 
 function M.rebalance_sidebar(sidebar, width)
-  if M.is_valid_win(sidebar.win) then
+  if not M.is_valid_win(sidebar.win) then
+    return
+  end
+
+  -- The header spans the note list and the selector column.  Resize that
+  -- parent region first, then restore the fixed selector width; resizing only
+  -- the note window makes Neovim give the selector its preferred `winwidth`.
+  if M.is_valid_win(sidebar.header_win) and M.is_valid_win(sidebar.notebook_win) then
+    local selector_width = math.max(1, tonumber(sidebar.selector_width) or 3)
+    vim.wo[sidebar.notebook_win].winfixwidth = true
+    pcall(vim.api.nvim_win_set_width, sidebar.header_win, width + selector_width + 1)
+    pcall(vim.api.nvim_win_set_width, sidebar.notebook_win, selector_width)
+  else
     vim.wo[sidebar.win].winfixwidth = true
     pcall(vim.api.nvim_win_set_width, sidebar.win, width)
   end

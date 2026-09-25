@@ -90,15 +90,21 @@ The `all` view uses compact cards:
 
 - The title uses your normal editor foreground and wraps as necessary.
 - A literal pin is shown only for pinned notes.
-- Creation date, linked target, notebook and tags occupy only the lines they
-  need.
-- Tags are high-contrast colour chips; a tag colour is stored in the index and
-  can be adjusted manually in `index.json`.
+- A coloured project circle prefixes the title; the creation date is followed
+  by compact, high-contrast tag squares. Linked targets use their own line
+  only when present.
+- Project and tag names stay in the selector column, so cards do not repeat
+  metadata unnecessarily. Tag colours are stored in the index and can be
+  adjusted manually in `index.json`.
 
-`Tab` cycles `all` and your notebooks. Their coloured chips are shown at the
-top of the sidebar. `C` opens or closes the calendar for the active view; its
-month markers and day list respect the active notebook and tag filters. The
-calendar always renders six weeks, so changing month does not resize it.
+The note list has a fixed header above it, so scrolling cards never hides the
+current controls. The Markdown preview remains an independent window beside
+the sidebar. Its selector column on the right grows only as far as the longest
+project or tag name, and lists projects above tags.
+`Tab` / `Shift-Tab` cycle `all` and notebooks forward/backward; `f` /
+`F` cycle tags forward/backward. `C` opens or closes the calendar for the
+active filters; its month markers and day list respect both project and tag.
+The calendar always renders six weeks, so changing month does not resize it.
 Numeric input jumps to a day.
 
 | Key | Action |
@@ -112,9 +118,9 @@ Numeric input jumps to a day.
 | `p` | Pin or unpin selected note |
 | `#` | Edit note tags |
 | `s` | Cycle `updated`, `date`, `created` sort |
-| `F` | Cycle tag filter |
 | `b` | Manage notebooks |
-| `Tab` | Cycle all notes and notebooks |
+| `Tab` / `Shift-Tab` | Next / previous project |
+| `f` / `F` | Next / previous tag |
 | `C` | Open or close the filtered calendar |
 | `/` | Telescope live grep in the active `all` scope |
 | `o` | Open an attached target in Oil |

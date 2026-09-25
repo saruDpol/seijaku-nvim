@@ -8,18 +8,15 @@ local state = {
   root_dir = nil,
 
   dirty = false,
-  dirty_since_last_backup = false,
-
   index = nil,
 
   notes_by_id = {},
-  todos_by_id = {},
+  notebooks_by_id = {},
   notes_by_file = {},
   note_ids_by_target = {},
-  todo_ids_by_target = {},
   target_paths_by_dir = {},
   note_ids_by_date = {},
-  todo_ids_by_date = {},
+  note_ids_by_notebook = {},
   calendar_counts_by_month = {},
 
   context = {
@@ -27,27 +24,16 @@ local state = {
     association = nil,
   },
 
-  timers = {
-    save = nil,
-    sidebar = nil,
-  },
-
   sidebar = {
     open = false,
     win = nil,
     buf = nil,
     mode = "all",
-    all_sort = "date",
-    all_filter = "all",
+    all_sort = "updated",
     all_tag = "all",
-    todo_filter = "open",
-    layout_mode = "docked",
-    standalone_host_win = nil,
-    current_dir = nil,
-    current_target = nil,
+    all_notebook = "all",
     lines = {},
     line_items = {},
-    note_wins = {},
     note_bufs = {},
     source_win = nil,
     preview_win = nil,
@@ -60,6 +46,7 @@ local state = {
     calendar_notes_lines = {},
     calendar_notes_items = {},
     calendar_day_input = "",
+    closing = false,
   },
 }
 
@@ -72,23 +59,14 @@ function M.setup(config)
   if state.sidebar.mode == "agenda" then
     state.sidebar.mode = "calendar"
   end
-  if state.sidebar.mode ~= "all"
-      and state.sidebar.mode ~= "directory"
-      and state.sidebar.mode ~= "todo"
-      and state.sidebar.mode ~= "calendar" then
-    state.sidebar.mode = "directory"
+  if state.sidebar.mode ~= "all" and state.sidebar.mode ~= "calendar" then
+    state.sidebar.mode = "all"
   end
-  state.sidebar.all_sort = config.sidebar.default_all_sort or "date"
-  state.sidebar.all_filter = config.sidebar.default_all_filter or "all"
+  state.sidebar.all_sort = config.sidebar.default_all_sort or "updated"
   state.sidebar.all_tag = "all"
-  state.sidebar.todo_filter = config.sidebar.default_todo_filter or "open"
-  state.sidebar.layout_mode = "docked"
-  state.sidebar.standalone_host_win = nil
-  state.sidebar.current_dir = nil
-  state.sidebar.current_target = nil
+  state.sidebar.all_notebook = "all"
   state.sidebar.lines = {}
   state.sidebar.line_items = {}
-  state.sidebar.note_wins = {}
   state.sidebar.note_bufs = {}
   state.sidebar.source_win = nil
   state.sidebar.preview_win = nil
@@ -101,6 +79,7 @@ function M.setup(config)
   state.sidebar.calendar_notes_lines = {}
   state.sidebar.calendar_notes_items = {}
   state.sidebar.calendar_day_input = ""
+  state.sidebar.closing = false
   state.context.last = nil
   state.context.association = nil
 end
@@ -111,15 +90,10 @@ end
 
 function M.mark_dirty()
   state.dirty = true
-  state.dirty_since_last_backup = true
 end
 
 function M.clear_dirty()
   state.dirty = false
-end
-
-function M.clear_backup_dirty()
-  state.dirty_since_last_backup = false
 end
 
 return M

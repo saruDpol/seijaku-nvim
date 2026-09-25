@@ -17,16 +17,8 @@ function M.setup()
     require("seijaku").mode_all()
   end, {})
 
-  vim.api.nvim_create_user_command("SeijakuModeDirectory", function()
-    require("seijaku").mode_directory()
-  end, {})
-
   vim.api.nvim_create_user_command("SeijakuModeCalendar", function()
     require("seijaku").mode_calendar()
-  end, {})
-
-  vim.api.nvim_create_user_command("SeijakuModeTodo", function()
-    require("seijaku").mode_todo()
   end, {})
 
   vim.api.nvim_create_user_command("SeijakuToggleMode", function()
@@ -35,10 +27,6 @@ function M.setup()
 
   vim.api.nvim_create_user_command("SeijakuNew", function()
     require("seijaku").new_note()
-  end, {})
-
-  vim.api.nvim_create_user_command("SeijakuTodo", function()
-    require("seijaku").new_todo()
   end, {})
 
   vim.api.nvim_create_user_command("SeijakuNewForCurrent", function()
@@ -51,6 +39,10 @@ function M.setup()
     nargs = 1,
     complete = "file",
   })
+
+  vim.api.nvim_create_user_command("SeijakuNotebook", function()
+    require("seijaku").manage_notebooks()
+  end, {})
 
   vim.api.nvim_create_user_command("SeijakuAttachPath", function(args)
     if #args.fargs < 2 then
@@ -68,9 +60,6 @@ function M.setup()
         local items = {}
         for _, note in ipairs(require("seijaku.index").list_notes()) do
           table.insert(items, note.id)
-        end
-        for _, todo in ipairs(require("seijaku.index").list_todos()) do
-          table.insert(items, todo.id)
         end
         return items
       end
@@ -95,9 +84,6 @@ function M.setup()
         local items = {}
         for _, note in ipairs(require("seijaku.index").list_notes()) do
           table.insert(items, note.id)
-        end
-        for _, todo in ipairs(require("seijaku.index").list_todos()) do
-          table.insert(items, todo.id)
         end
         return items
       end

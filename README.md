@@ -1,46 +1,22 @@
 # 静寂 seijaku.nvim
 
-> A quiet, filesystem-aware Markdown notebook for Neovim.
+> A quiet Markdown notebook for Neovim.
 
-`seijaku.nvim` keeps notes close to the files, directories and dates they
-belong to. It uses real Neovim splits, a small JSON index and ordinary Markdown
-files—no database, web view or proprietary format.
+Seijaku keeps ordinary Markdown notes in a local vault and presents them as a
+compact, keyboard-first notebook. Notes can be pinned, tagged, grouped into
+notebooks and linked to any file or directory without coupling their title to
+that target.
 
-![img_1](./plugin/img_1.png)
+The current development version is intentionally small: an all-notes view,
+notebook tabs, an optional calendar, one persistent preview pane, native
+Neovim windows, and a JSON index. There is no database, web view, directory
+mode or standalone todo model.
 
-<!-- ```text -->
-<!-- 静寂                         sort date | filter all -->
-<!-- ──────────────────────────────────────────────── -->
-<!-- date                     dir                     cal -->
-<!---->
-<!--  2026-07-16 -->
-<!--    · project notes                     README.md -->
-<!--    ◷ diary -->
-<!--    ○ meeting-api                         api.lua -->
-<!--    ≡ desc_config                        config.lua -->
-<!-- ``` -->
+![Seijaku](./plugin/img_1.png)
 
-## ◆ Highlights
+## Install
 
-- Four views: global index, filesystem context, todos and calendar.
-- Notes attach to any file or directory, including images, video and office
-  documents.
-- Four note types with independent color, icon and filtering.
-- Configurable dark-aware palette, tags and pinned notes.
-- Calendar scheduling independent from creation and modification dates.
-- Dynamic preview plus additional managed note splits.
-- Adaptive docked and standalone layouts.
-- Live synchronization between Neovim instances sharing a vault.
-- Soft-wrapped Markdown and compact generated metadata.
-- Oil and netrw filesystem contexts, plus scoped Telescope live grep.
-
-![img_2](./plugin/img_2.png)
-
-## ↓ Install
-
-### Lazy.nvim / LazyVim
-
-Create `~/.config/nvim/lua/plugins/seijaku.lua`:
+### lazy.nvim / LazyVim
 
 ```lua
 return {
@@ -52,32 +28,21 @@ return {
       vault_dir = "~/Notes/seijaku",
       sidebar = {
         width = "auto",
-        standalone_layout = "vertical",
         default_mode = "all",
-        default_all_sort = "date",
-        default_all_filter = "all",
+        default_all_sort = "updated",
       },
       editor = {
         wrap = true,
         linebreak = true,
         breakindent = true,
-      },
-      keymaps = {
-        enable_default = true,
-        toggle = "<A-o>",
-        new_for_current = "<leader>a",
+        fold_metadata = true,
       },
     },
   },
 }
 ```
 
-Restart Neovim and run `:Lazy sync`. Lazy calls
-`require("seijaku").setup(opts)` automatically.
-
 ### Local checkout
-
-For a local clone or active development, point Lazy directly at the directory:
 
 ```lua
 return {
@@ -86,399 +51,103 @@ return {
     name = "seijaku.nvim",
     main = "seijaku",
     lazy = false,
-    opts = {
-      vault_dir = "~/Notes/seijaku",
-    },
+    opts = { vault_dir = "~/Notes/seijaku" },
   },
 }
 ```
 
-Edits are visible directly; no `:Lazy sync` is required. Restart Neovim after
-changing Lua code so cached modules are loaded again.
+## Notes
 
-Without a plugin manager, place or symlink the repository under a native
-package path and call setup from `init.lua`:
+`n` opens one native composer. Move through title, template, notebook,
+associated directory or file, and tags with `j`/`k`; `Enter` edits the active
+field. The composer stays in the same floating window while a field is being
+edited or selected. Templates and notebooks are single-choice; tags are
+multi-select. Notes start with generated metadata, followed by the title and
+template body. The metadata stays folded when `editor.fold_metadata` is
+enabled.
 
-```text
-~/.local/share/nvim/site/pack/dev/start/seijaku.nvim
-```
+Templates live in `opts.notes.templates`; a template is a list of lines, a
+string, or a function. Available values are `{title}`, `{template}`,
+`{notebook}`, `{date}`, `{calendar_date}`, `{target}` and `{target_name}`.
 
-```lua
-require("seijaku").setup({
-  vault_dir = "~/Notes/seijaku",
-})
-```
+Notes may be attached to files or directories through `a`,
+`:SeijakuNewForCurrent`, `:SeijakuAttachPath`, or the public Lua API. Deleting
+or moving a target never deletes its note; Seijaku simply marks the target as
+unavailable until it exists again.
 
-## ◇ Notes
+Notebooks are projects with a name, colour and optional working directory.
+Use `:SeijakuNotebook` (or `b` in the sidebar) to create, edit, delete or open
+their directory in Oil. Removing a notebook leaves its notes in place and
+simply clears their notebook assignment.
 
-Creating a note first opens a small native picker. Move with `j/k` or the arrow
-keys and confirm with `Enter`; pressing `1`–`5` selects immediately. The same
-transparent popup then becomes a name input with the suggested title ready to
-edit. Press `Enter` to create the item; `Esc` or `q` cancels the type picker.
+## Sidebar
 
-| Key | Type        | Mark | Suggested title              |
-| --- | ----------- | :--: | ---------------------------- |
-| `1` | General     | `·`  | Current target or `note-`    |
-| `2` | Diary       | `◷`  | `diary`                      |
-| `3` | Meeting     | `○`  | `meeting-<filename>`         |
-| `4` | Description | `≡`  | `desc-<filename>`            |
-| `5` | Todo        | `□`  | Empty input                   |
+`<A-o>` toggles the sidebar by default. Opening it creates a persistent preview
+window beside it. Selection updates that one preview instead of creating a
+growing collection of managed splits. Closing the preview closes Seijaku too.
 
-General, diary, meeting, description and todo rows use dark Japanese-inspired
-blue, gold, orange, Seijaku green and sakura pink. Existing notes without a
-stored type remain general.
+The `all` view uses compact cards:
 
-Every new note starts with a small generated header before its title:
+- The title uses your normal editor foreground and wraps as necessary.
+- A literal pin is shown only for pinned notes.
+- Creation date, linked target, notebook and tags occupy only the lines they
+  need.
+- Tags are high-contrast colour chips; a tag colour is stored in the index and
+  can be adjusted manually in `index.json`.
 
-```markdown
-<!-- seijaku:metadata:start -->
+`Tab` cycles `all` and your notebooks. Their coloured chips are shown at the
+top of the sidebar. `C` opens or closes the calendar for the active view; its
+month markers and day list respect the active notebook and tag filters. The
+calendar always renders six weeks, so changing month does not resize it.
+Numeric input jumps to a day.
 
-> Type: `meeting`
-> Created: `2026-07-16T18:30:00`
-> Updated: `2026-07-16T18:30:00`
-> Target: `/project/api.lua`
-> Date: `2026-07-18`
-> Tags: `work`, `project-x`
-> Pinned: `true`
+| Key | Action |
+| --- | --- |
+| `j` / `k` | Move between cards (or calendar days) |
+| `Enter` | Focus the persistent preview for the selected note |
+| `n` | New global note; on calendar, schedules it for that day |
+| `a` | New note attached to the current Oil/netrw/buffer target |
+| `r` | Rename selected note |
+| `dd` | Delete selected note |
+| `p` | Pin or unpin selected note |
+| `#` | Edit note tags |
+| `s` | Cycle `updated`, `date`, `created` sort |
+| `F` | Cycle tag filter |
+| `b` | Manage notebooks |
+| `Tab` | Cycle all notes and notebooks |
+| `C` | Open or close the filtered calendar |
+| `/` | Telescope live grep in the active `all` scope |
+| `o` | Open an attached target in Oil |
+| `t` | Today |
+| `[` / `]` | Previous / next month in calendar |
 
-<!-- seijaku:metadata:end -->
-
-# meeting-api.lua
-```
-
-The header stays synchronized when metadata changes. `index.json` remains the
-source of truth during normal operation; reconciliation can recover type,
-dates, targets, tags and pin state from a Markdown file.
-
-New notes can receive a template per type. Templates are ordinary lines (or a
-callback returning lines) and support `{title}`, `{type}`, `{date}`,
-`{calendar_date}`, `{target}` and `{target_name}` placeholders. Generated
-metadata starts folded in Seijaku-managed note windows; use normal fold commands
-such as `za`, or `:SeijakuToggleMetadata`, to reveal it. The fold stays closed
-after saves and shows the associated filename (or note title), type, pin and
-tags in one compact line. Tags appear as colored chips; the remaining fold has
-a transparent background.
-
-Tag colors are assigned when a tag is first used and stored in the vault's
-`index.json` under `tag_colors`. You can edit a color there manually using a
-six-digit hex value, for example `"work": "#49766a"`. Seijaku picks up external
-index changes automatically.
-
-## ⌁ Sidebar
-
-Open it with `Alt-o` or `:SeijakuToggle`. The default view is `all`.
-
-| Key     | Action                                                           |
-| ------- | ---------------------------------------------------------------- |
-| `Enter` | Open a note, toggle a todo, or enter the calendar day list       |
-| `a`     | Create a contextual note; create a todo in `todo`                 |
-| `n`     | Create a global note; create a todo in `todo`                     |
-| `r`     | Rename the selected note or todo                                 |
-| `dd`    | Delete the selected note or todo                                 |
-| `x`     | Detach the current target; clear a calendar date in the day list |
-| `Tab`   | Cycle `all → directory → todo → calendar`                        |
-| `s`     | Cycle `date → updated → created` sorting in `all`                |
-| `f`     | Cycle note types in `all`; cycle `all/open/closed` in `todo`     |
-| `F`     | Cycle the independent tag filter in `all`                        |
-| `#`     | Edit tags on the selected note in a popup                        |
-| `p`     | Pin or unpin the selected note or todo                           |
-| `o`     | Open the selected item's associated target in Oil               |
-| `t`     | Jump to the first visible note for today in `all`                |
-| `/`     | Live grep the notes in the current `all` or `directory` scope    |
-| `T`     | Create a todo for the selected day in `calendar`                 |
-| `R`     | Refresh                                                          |
-
-The green text in the top-right header is contextual: sort/filter state in
-`all`, `[/] month  t today` in `calendar`, and the Seijaku label in
-`directory`; todo mode shows its create/toggle reminder.
-
-### all
-
-- `date`: groups by calendar date, falling back to creation date.
-- `updated`: sorts by the last content or metadata update.
-- `created`: groups strictly by creation day.
-- `f`: independently cycles `all`, `general`, `diary`, `meeting` and `desc`.
-- `F`: cycles through `all tags` and the tags currently in the vault.
-- `p`: pins a note or todo above the regular result set without changing sort/filter state.
-- `t`: selects the first note for today in the active filters and updates the preview.
-
-Sorting, type filtering and tag filtering combine freely. The header shows the
-controls as `sort (s) … | filter (f) … | tag (F) …`, with only their current
-values emphasized. The unfiltered `all` view includes todos alongside notes;
-note-type or tag filters narrow the result to notes. The first associated target
-appears on the right of each row. `/` searches note contents after applying both
-active filters, so `meeting + #work` searches only matching meeting notes.
-Pinned rows use `›`, tagged rows use a filled square, and both markers occupy reserved
-columns before the note-type icon.
-Press `#` on a note to manage tags in a transparent native popup: `j/k` moves,
-`Enter` toggles a tag, `a` adds one, `Esc` saves and exits, and `q` cancels.
-Date groups in `all` and `todo` have subtle dividers; inactive tabs and dates
-use a quieter grey without italics.
-
-### directory
-
-For a file, the view shows notes and todos attached exactly to that file. For a
-directory, Oil buffer or netrw buffer, it renders a filtered recursive tree
-containing annotated paths and the intermediate directories needed to reach
-them. Associated tasks appear first under `Todos`, followed by notes. The
-`Notes` heading is shown when both kinds are present.
-
-In Oil and local netrw, the entry under the cursor is used for association
-actions; the view itself continues to represent the open directory and its
-descendants. Any real filesystem file is a valid target regardless of extension
-or file type. Remote netrw URLs are intentionally not treated as local targets.
-Press `o` on an associated note or todo to open its target through Oil: a
-directory opens directly, and a file opens its parent with the file selected.
-Missing targets remain associated but cannot be opened.
-
-`/` searches only notes attached to the current file, or to the current
-directory and its descendants. Search is deliberately unavailable in calendar
-mode. It requires `telescope.nvim` and `rg`; selecting a match opens the note in
-Seijaku's managed preview and jumps to the matching line.
-
-Deleting or moving a target never deletes its notes or todos. The stored association is
-kept at the old path and rendered with a warning-colored `!` in `all`,
-`directory` and `calendar`. Automatic relinking is intentionally left to the
-user for now, because a new path cannot be inferred safely in every case.
-
-### todo
-
-Todos are lightweight indexed items, not Markdown files, so they never open or
-replace a preview. They retain their creation timestamp and are grouped by an
-explicit calendar date, falling back to their creation day:
+## Commands
 
 ```text
- 2026-07-20
-   □ Review documentation          created 2026-07-20
-   ■ Prepare release                closed 2026-07-20
-```
-
-Use `n` (or `a`) to create one, `Enter` to complete or reopen it, `r` to edit
-its text, `dd` to delete it, `p` to pin it and `f` to cycle `all`, `open` and `closed`.
-The initial filter is `open`, so completed tasks stay hidden until requested.
-Todo is also option `5` in the shared item picker. Pin state is shared with
-`all`, `directory` and the calendar day list. Outside the calendar a new
-todo is assigned to today; from a calendar day it keeps that selected date.
-Direct todo creation and rename reuse the same transparent sakura input.
-Todos use minimal empty/filled box icons aligned with the note-icon column.
-Open items use sakura pink; closed text returns to a neutral grey and is struck
-through. Their metadata changes from `created` to `closed`, using
-the completion date. Long text occupies continuation lines instead of being
-trimmed with `...`. Newer dates and newer items appear first. Moving into or
-through this mode preserves the current preview and managed layout.
-
-### calendar
-
-The Gregorian calendar renders any month from year 1 through 9999. `YYYY-MM`
-uses Seijaku green; the selected day uses the active-mode red. Days containing
-notes are marked.
-
-| Key          | Calendar action                      |
-| ------------ | ------------------------------------ |
-| `h/l`, `←/→` | Previous/next day                    |
-| `j/k`, `↓/↑` | Next/previous week                   |
-| `[/]`        | Previous/next month                  |
-| `gg/G`       | First/last day of the month          |
-| `t`          | Today                                |
-| `0`–`9`      | Type a day number and jump to it     |
-| `Enter`      | Focus the items for the selected day |
-
-Calendar and day items are separate navigable windows. The calendar always
-renders a fixed six-week grid; shorter months leave trailing cells empty, so
-changing month never resizes the panel. `T` creates a todo for the selected day. `Enter` toggles a selected
-todo; selecting one never changes the preview. `Enter` on a day note opens an
-additional managed note split while keeping the dynamic preview. Moving through day notes updates
-the managed preview. A day without a previewable note keeps the current preview
-and layout unchanged. When the sidebar opens while calendar is the active mode,
-or the calendar column is entered from an external split, focus starts in the
-day-item list when it contains items. Empty days keep focus in the month grid.
-
-Notes created here receive an explicit `calendar_date`. Notes without one
-appear on their creation day; `x` clears an explicit date and restores that
-fallback. One-digit days `4`–`9` apply immediately; `0`–`3` briefly wait for a
-second digit, so both `7` and `18` work naturally. `Enter` confirms a pending
-digit and `Esc` cancels it. Invalid days leave the current selection unchanged.
-
-## ▦ Layouts
-
-With a normal editor window, Seijaku is docked on the side. In `all` and
-`directory`, its list, preview and additional notes share the sidebar column
-evenly. Closing the dynamic preview promotes the most recently opened managed
-note window to that role.
-
-When no meaningful external window remains and
-`sidebar.standalone_layout = "vertical"`, notes become full-height columns to
-the left of the sidebar:
-
-```text
-┌──────────────┬──────────────┬─────────────┐
-│ dynamic note │ fixed note   │ sidebar     │
-└──────────────┴──────────────┴─────────────┘
-```
-
-Calendar keeps its two internal panels on the right:
-
-```text
-┌─────────────────────────────┬─────────────┐
-│                             │ calendar    │
-│ dynamic note                ├─────────────┤
-│                             │ day notes   │
-└─────────────────────────────┴─────────────┘
-```
-
-Window ownership is explicit. Sidebar panels and notes opened by Seijaku are
-managed; manual splits and windows created by other plugins are external—even
-if they show the same note buffer. Seijaku never reuses or resizes those
-external windows, and creating one during a standalone session causes no
-surprise reflow.
-
-Changing modes, selecting an empty directory/day/filter, or moving through the
-calendar never consumes existing standalone note columns.
-
-## ⌨ Commands
-
-```vim
 :SeijakuToggle
 :SeijakuOpenSidebar
 :SeijakuCloseSidebar
 :SeijakuModeAll
-:SeijakuModeDirectory
-:SeijakuModeTodo
 :SeijakuModeCalendar
-:SeijakuToggleMode
+:SeijakuToggleMode             # toggle calendar
 :SeijakuNew
-:SeijakuTodo
 :SeijakuNewForCurrent
 :SeijakuNewForPath {path}
-:SeijakuAttachPath {item_id} {path}
-:SeijakuDetachPath {item_id} {path}
-:SeijakuOpen {note_id}
-:SeijakuList
+:SeijakuNotebook
+:SeijakuOpen {note-id}
+:SeijakuAttachPath {note-id} {path}
+:SeijakuDetachPath {note-id} {path}
 :SeijakuRebuildIndex
 :SeijakuReconcile
-:SeijakuGrep
-:SeijakuToggleMetadata
 ```
 
-`:SeijakuReconcile` compares `notes/` with `index.json`: it imports orphaned
-Markdown files, removes index entries whose note file disappeared, and handles
-notes moved inside the vault in one pass. It does not remove notes merely
-because an associated external target is missing. If two Markdown files declare
-the same `note_id`, reconciliation reports both paths and leaves that ID
-unchanged instead of choosing one copy and risking data loss. Todos live only
-in the atomic index and are never modified by reconciliation.
+## Vault and synchronisation
 
-Default global mappings:
+The vault contains ordinary Markdown files in `notes/` and an `index.json`.
+The index is written atomically and watched for changes from other Neovim
+instances. Reconcile is available when importing existing Markdown files or
+repairing a vault after external edits.
 
-```text
-Alt-o       toggle the sidebar
-<leader>a  create a note for the current buffer, Oil entry or netrw entry
-```
-
-Set either mapping to `false`, or use `keymaps.enable_default = false`, to
-disable the defaults.
-
-## ⚙ Configuration
-
-```lua
-require("seijaku").setup({
-  vault_dir = "~/Notes/seijaku",
-  sidebar = {
-    width = "auto",                 -- bounded between 44 and 56
-    position = "right",
-    standalone_layout = "vertical", -- use another value to stay docked
-    default_mode = "all",
-    default_all_sort = "date",
-    default_all_filter = "all",
-    default_todo_filter = "open",
-    all_mode_limit = 500,
-    debounce_ms = 150,
-  },
-  editor = {
-    open_cmd = "belowright split",
-    wrap = true,
-    linebreak = true,
-    breakindent = true,
-    fold_metadata = true,
-  },
-  appearance = {
-    palette = "auto", -- vivid on dark backgrounds, muted on light ones
-    colors = {
-      -- general = "#4f9fbc", -- override any semantic color
-      -- diary = "#d0a02b",
-      -- meeting = "#d1663a",
-      -- description = "#75a663",
-      -- todo = "#d9789c",
-      -- brand = "#88ac76",
-      -- active = "#cc5555",
-    },
-  },
-  notes = {
-    templates = {
-      general = {},
-      diary = { "## Entry", "" },
-      meeting = {
-        "## Attendees", "", "## Agenda", "",
-        "## Notes", "", "## Actions", "",
-      },
-      desc = { "## Description", "", "## Context", "" },
-    },
-  },
-  keymaps = {
-    enable_default = true,
-    toggle = "<A-o>",
-    new_for_current = "<leader>a",
-  },
-  integrations = {
-    oil = true,
-    netrw = true,
-    telescope = true,
-  },
-  index = {
-    save_debounce_ms = 500,
-    reload_debounce_ms = 120,
-    lock_timeout_ms = 2000,
-    stale_lock_ms = 10000,
-    watch_external_changes = true,
-  },
-})
-```
-
-Wrapping is window-local and visual: long Markdown lines continue on screen
-without inserting newline characters or affecting Markdown buffers outside
-Seijaku. `appearance.palette` accepts `auto`, `vivid` or `muted`; every semantic
-color can be replaced independently without changing renderer code.
-
-Instances sharing a vault watch atomic replacements of `index.json`. External
-changes are reloaded after a short debounce and refresh an open sidebar. Writes
-take a short filesystem lock, reload the latest index and merge only local
-per-note and per-todo upserts/deletes before replacing the file atomically;
-stale instances therefore cannot overwrite unrelated changes from another
-Neovim process.
-
-## □ Vault
-
-```text
-~/Notes/seijaku/
-├── index.json                  # note metadata, targets and lightweight todos
-├── notes/
-│   └── YYYY/MM/DD/<note_id>.md
-└── backups/
-    ├── canonical/
-    └── snapshots/
-```
-
-- Notes are ordinary Markdown files.
-- IDs are independent from filesystem paths.
-- A note or todo can target many paths; a path can have many items.
-- Notes and todos can remain global without any target.
-- Tags and pin state are stored in the index and mirrored in note metadata.
-- Calendar lookups use in-memory indexes by date and month rather than scanning
-  every note and todo on each movement.
-
-## License
-
-Copyright © 2026 saruDpol.
-
-Licensed under the [Apache License 2.0](LICENSE).
-See the [NOTICE](NOTICE) file for attribution information.
+This rework uses schema 5. Loading an earlier index upgrades it and removes the
+legacy todo records. Those old todo entries are deliberately not migrated:
+dedicated task notes and templates replace the old model.

@@ -6,7 +6,6 @@ local index = require("seijaku.index")
 local commands = require("seijaku.commands")
 local autocmds = require("seijaku.autocmds")
 local notes = require("seijaku.notes")
-local todos = require("seijaku.todos")
 local context = require("seijaku.context")
 local sidebar = require("seijaku.sidebar")
 
@@ -69,6 +68,10 @@ function M.new_note_for_path(path)
   return notes.create_for_path(path)
 end
 
+function M.manage_notebooks()
+  return notes.manage_notebooks()
+end
+
 function M.toggle_sidebar()
   return sidebar.toggle()
 end
@@ -85,16 +88,8 @@ function M.mode_all()
   return sidebar.set_mode("all")
 end
 
-function M.mode_directory()
-  return sidebar.set_mode("directory")
-end
-
 function M.mode_calendar()
   return sidebar.set_mode("calendar")
-end
-
-function M.mode_todo()
-  return sidebar.set_mode("todo")
 end
 
 function M.toggle_mode()
@@ -103,15 +98,6 @@ end
 
 function M.open_note(note_id)
   return notes.open(note_id)
-end
-
-function M.new_todo(opts)
-  opts = vim.deepcopy(opts or {})
-  local sidebar_state = state.get().sidebar
-  if not opts.calendar_date and sidebar_state.open and sidebar_state.mode == "calendar" then
-    opts.calendar_date = sidebar_state.calendar_date
-  end
-  return todos.create(opts)
 end
 
 function M.live_grep()
@@ -123,8 +109,6 @@ function M.attach_path(item_id, path)
   local ok, err
   if index.get_note(item_id) then
     ok, err = index.attach(item_id, path, target_type)
-  elseif index.get_todo(item_id) then
-    ok, err = index.attach_todo(item_id, path, target_type)
   else
     ok, err = false, "item not found"
   end
@@ -143,8 +127,6 @@ function M.detach_path(item_id, path)
   local ok
   if index.get_note(item_id) then
     ok = index.detach(item_id, path)
-  elseif index.get_todo(item_id) then
-    ok = index.detach_todo(item_id, path)
   end
 
   if not ok then

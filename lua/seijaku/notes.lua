@@ -4,23 +4,17 @@ local state_mod = require("seijaku.state")
 local index = require("seijaku.index")
 local paths = require("seijaku.paths")
 local util = require("seijaku.util")
+local picker = require("seijaku.picker")
+local calendar = require("seijaku.calendar")
 
 local metadata_start = "<!-- seijaku:metadata:start -->"
 local metadata_end = "<!-- seijaku:metadata:end -->"
-local note_type_ns = vim.api.nvim_create_namespace("seijaku_note_type_selector")
 local tag_selector_ns = vim.api.nvim_create_namespace("seijaku_tag_selector")
-local active_note_type_selector = nil
 local active_tag_selector = nil
 local tag_highlights = {}
 local tag_glyph_highlights = {}
 local tag_highlight_colors = {}
-local note_types = {
-  { value = "general", label = "General", icon = "·", highlight = "SeijakuNoteGeneral" },
-  { value = "diary", label = "Diary", icon = "◷", highlight = "SeijakuNoteDiary" },
-  { value = "meeting", label = "Meeting", icon = "○", highlight = "SeijakuNoteMeeting" },
-  { value = "desc", label = "Description", icon = "≡", highlight = "SeijakuNoteDescription" },
-  { value = "todo", label = "Todo", icon = "□", highlight = "SeijakuTodoOpen" },
-}
+local notebook_highlights = {}
 
 local function refresh_sidebar()
   local ok, sidebar = pcall(require, "seijaku.sidebar")
@@ -57,226 +51,9 @@ function M.note_relative_path(note_id)
   )
 end
 
-local function close_note_type_selector(selector)
-  if not selector or selector.closed then
-    return
-  end
-  selector.closed = true
-
-  if selector.win and vim.api.nvim_win_is_valid(selector.win) then
-    if vim.api.nvim_get_current_win() == selector.win then
-      pcall(vim.cmd, "stopinsert")
-    end
-    pcall(vim.api.nvim_win_close, selector.win, true)
-  end
-  if selector.origin_win and vim.api.nvim_win_is_valid(selector.origin_win) then
-    pcall(vim.api.nvim_set_current_win, selector.origin_win)
-  end
-  if active_note_type_selector == selector then
-    active_note_type_selector = nil
-  end
-end
-
-function M.select_note_type(opts, callback)
-  if type(opts) == "function" then
-    callback = opts
-    opts = {}
-  end
-  opts = opts or {}
-
-  if active_note_type_selector then
-    close_note_type_selector(active_note_type_selector)
-  end
-  if active_tag_selector and not active_tag_selector.closed then
-    active_tag_selector.close()
-  end
-  local origin_win = vim.api.nvim_get_current_win()
-
-  local lines = {}
-  for index_in_list, item in ipairs(note_types) do
-    lines[index_in_list] = string.format("  %d  %s  %s", index_in_list, item.icon, item.label)
-  end
-
-  local width = 0
-  for _, line in ipairs(lines) do
-    width = math.max(width, vim.fn.strdisplaywidth(line))
-  end
-  width = math.max(22, math.min(width + 3, math.max(1, vim.o.columns - 4)))
-
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "wipe"
-  vim.bo[buf].swapfile = false
-  vim.bo[buf].filetype = "seijaku-note-type"
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].modifiable = false
-
-  local height = #lines
-  local win = vim.api.nvim_open_win(buf, true, {
-    relative = "editor",
-    row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
-    col = math.max(0, math.floor((vim.o.columns - width) / 2)),
-    width = width,
-    height = height,
-    style = "minimal",
-    border = "rounded",
-    title = " new item ",
-    title_pos = "center",
-    zindex = 60,
-  })
-
-  vim.wo[win].cursorline = true
-  vim.wo[win].winhighlight =
-    "Normal:SeijakuPickerNormal,FloatBorder:SeijakuBrand,FloatTitle:SeijakuBrand,CursorLine:SeijakuPickerCursor"
-  vim.wo[win].winblend = 0
-
-  for line, item in ipairs(note_types) do
-    vim.api.nvim_buf_set_extmark(buf, note_type_ns, line - 1, 0, {
-      end_col = #lines[line],
-      hl_group = item.highlight,
-      priority = 100,
-    })
-  end
-
-  local selector = {
-    buf = buf,
-    win = win,
-    origin_win = origin_win,
-    closed = false,
-  }
-  active_note_type_selector = selector
-
-  local function show_title_input(item)
-    if selector.closed or not vim.api.nvim_win_is_valid(win) then
-      return
-    end
-
-    local default = opts.title_for_type
-    if type(default) == "function" then
-      default = default(item.value)
-    end
-    default = tostring(default or "note-")
-
-    vim.api.nvim_buf_clear_namespace(buf, note_type_ns, 0, -1)
-    vim.bo[buf].modifiable = true
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { default })
-    vim.bo[buf].filetype = "seijaku-note-title"
-    local function submit()
-      if selector.closed or not vim.api.nvim_buf_is_valid(buf) then
-        return
-      end
-      local title = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]
-      if not title or title:match("^%s*$") then
-        return
-      end
-      close_note_type_selector(selector)
-      vim.schedule(function()
-        callback(item.value, title)
-      end)
-    end
-
-    vim.api.nvim_win_set_config(win, {
-      relative = "editor",
-      row = math.max(0, math.floor((vim.o.lines - 1) / 2) - 1),
-      col = math.max(0, math.floor((vim.o.columns - width) / 2)),
-      width = width,
-      height = 1,
-      style = "minimal",
-      border = "rounded",
-      title = " item name ",
-      title_pos = "center",
-      zindex = 60,
-    })
-    vim.wo[win].cursorline = false
-    vim.wo[win].winhighlight = string.format(
-      "Normal:%s,FloatBorder:SeijakuBrand,FloatTitle:SeijakuBrand",
-      item.highlight
-    )
-    vim.wo[win].wrap = false
-    pcall(vim.api.nvim_win_set_cursor, win, { 1, #default })
-
-    local input_opts = { buffer = buf, silent = true, nowait = true }
-    vim.keymap.set("i", "<CR>", submit, input_opts)
-    vim.keymap.set("i", "<Esc>", function()
-      close_note_type_selector(selector)
-    end, input_opts)
-    vim.keymap.set("i", "<C-c>", function()
-      close_note_type_selector(selector)
-    end, input_opts)
-    vim.cmd("startinsert!")
-  end
-
-  local function move(delta)
-    if selector.closed or not vim.api.nvim_win_is_valid(win) then
-      return
-    end
-    local line = vim.api.nvim_win_get_cursor(win)[1] + delta
-    if line < 1 then
-      line = #note_types
-    elseif line > #note_types then
-      line = 1
-    end
-    vim.api.nvim_win_set_cursor(win, { line, 0 })
-  end
-
-  local function finish(choice)
-    local item = note_types[choice]
-    if not item or selector.closed then
-      return
-    end
-    show_title_input(item)
-  end
-
-  local keymap_opts = { buffer = buf, silent = true, nowait = true }
-  vim.keymap.set("n", "j", function()
-    move(1)
-  end, keymap_opts)
-  vim.keymap.set("n", "<Down>", function()
-    move(1)
-  end, keymap_opts)
-  vim.keymap.set("n", "k", function()
-    move(-1)
-  end, keymap_opts)
-  vim.keymap.set("n", "<Up>", function()
-    move(-1)
-  end, keymap_opts)
-  vim.keymap.set("n", "<CR>", function()
-    finish(vim.api.nvim_win_get_cursor(win)[1])
-  end, keymap_opts)
-  for index_in_list = 1, #note_types do
-    local choice = index_in_list
-    vim.keymap.set("n", tostring(choice), function()
-      finish(choice)
-    end, keymap_opts)
-  end
-  vim.keymap.set("n", "<Esc>", function()
-    close_note_type_selector(selector)
-  end, keymap_opts)
-  vim.keymap.set("n", "<C-c>", function()
-    close_note_type_selector(selector)
-  end, keymap_opts)
-  vim.keymap.set("n", "q", function()
-    close_note_type_selector(selector)
-  end, keymap_opts)
-
-  if opts.initial_type then
-    for _, item in ipairs(note_types) do
-      if item.value == opts.initial_type then
-        show_title_input(item)
-        break
-      end
-    end
-  end
-
-  return win, buf
-end
-
 function M.select_tags(initial_tags, callback)
   if active_tag_selector and not active_tag_selector.closed then
     active_tag_selector.close()
-  end
-  if active_note_type_selector then
-    close_note_type_selector(active_note_type_selector)
   end
 
   local selected = {}
@@ -384,12 +161,13 @@ function M.select_tags(initial_tags, callback)
         })
       end
     end
+    local height = math.min(#lines, math.max(1, vim.o.lines - 4))
     vim.api.nvim_win_set_config(win, {
       relative = "editor",
-      row = math.max(0, math.floor((vim.o.lines - #lines) / 2) - 1),
+      row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
       col = math.max(0, math.floor((vim.o.columns - width) / 2)),
       width = math.min(width, math.max(1, vim.o.columns - 4)),
-      height = #lines,
+      height = height,
       style = "minimal",
       border = "rounded",
       title = " tags · enter toggle · a add ",
@@ -482,61 +260,16 @@ function M.select_tags(initial_tags, callback)
   return win, buf
 end
 
-function M.input_title(item_type, default, callback)
-  return M.select_note_type({
-    initial_type = item_type,
-    title_for_type = function()
-      return default or ""
-    end,
-  }, function(_, title)
-    callback(title)
-  end)
-end
-
-local function default_title_for_type(note_type, opts)
-  if note_type == "todo" then
-    return ""
-  end
-
-  if note_type == "diary" then
-    return "diary"
-  end
-
-  local associated_file = nil
-  if opts.target_path and opts.target_type == "file" then
-    associated_file = paths.basename(opts.target_path)
-  end
-
-  if note_type == "meeting" then
-    return "meeting-" .. (associated_file or "")
-  end
-
-  if note_type == "desc" then
-    return "desc-" .. (associated_file or "")
-  end
-
-  if opts.title and opts.title ~= "Untitled" then
-    return opts.title
-  end
-  return "note-"
-end
-
-local function prompt_note(default, opts, callback)
-  M.select_note_type({
-    initial_type = default,
-    title_for_type = function(note_type)
-      return default_title_for_type(note_type, opts)
-    end,
-  }, callback)
-end
-
 local function metadata_lines(note)
   local lines = {
     metadata_start,
-    "> Type: `" .. tostring(note.note_type or "general") .. "`",
     "> Created: `" .. tostring(note.created_at or "") .. "`",
     "> Updated: `" .. tostring(note.updated_at or "") .. "`",
   }
+
+  if note.template_id then
+    table.insert(lines, "> Template: `" .. tostring(note.template_id) .. "`")
+  end
 
   if note.targets and #note.targets > 0 then
     for _, target in ipairs(note.targets) do
@@ -548,6 +281,10 @@ local function metadata_lines(note)
 
   if note.calendar_date then
     table.insert(lines, "> Date: `" .. tostring(note.calendar_date) .. "`")
+  end
+
+  if note.notebook_id then
+    table.insert(lines, "> Notebook: `" .. tostring(note.notebook_id) .. "`")
   end
 
   if note.tags and #note.tags > 0 then
@@ -574,10 +311,11 @@ end
 
 local function template_lines(note, opts)
   local templates = ((state_mod.get().config.notes or {}).templates or {})
-  local template = templates[note.note_type or "general"]
+  local template = templates[note.template_id or "blank"]
   local values = {
     title = note.title,
-    type = note.note_type,
+    template = note.template_id or "blank",
+    notebook = note.notebook_id and (index.get_notebook(note.notebook_id) or {}).name or "",
     date = tostring(note.created_at or ""):match("^%d%d%d%d%-%d%d%-%d%d") or "",
     calendar_date = note.calendar_date or "",
     target = opts.target_path or "",
@@ -656,12 +394,17 @@ function M.metadata_foldtext()
   local note = index.get_note_for_file(vim.api.nvim_buf_get_name(0))
   local lines = vim.api.nvim_buf_get_lines(0, vim.v.foldstart - 1, vim.v.foldend, false)
   local target = nil
+  local notebook_id = nil
   local tags = nil
   local pinned = nil
   for _, line in ipairs(lines) do
     local target_value = line:match("^> Target:%s*`([^`]+)`")
     if target_value then
       target = target_value
+    end
+    local notebook_value = line:match("^> Notebook:%s*`([^`]+)`")
+    if notebook_value then
+      notebook_id = notebook_value
     end
     local pinned_value = line:match("^> Pinned:%s*`([^`]+)`")
     if pinned_value then
@@ -678,6 +421,8 @@ function M.metadata_foldtext()
 
   local label = target and target ~= "global" and paths.basename(target) or note and note.title
     or vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t:r")
+  notebook_id = notebook_id or (note and note.notebook_id)
+  local notebook = notebook_id and index.get_notebook(notebook_id) or nil
   tags = tags or note and note.tags or {}
   if pinned == nil then
     pinned = note and note.pinned == true or false
@@ -685,6 +430,17 @@ function M.metadata_foldtext()
   local chunks = { { " " .. tostring(label) .. " ", "SeijakuMetadataFile" } }
   if pinned then
     table.insert(chunks, { " pinned ", "SeijakuPinnedBlock" })
+  end
+  if notebook_id then
+    local book_name = notebook and notebook.name or notebook_id
+    local color = notebook and notebook.color
+    local group = "SeijakuTag"
+    if type(color) == "string" and color:match("^#%x%x%x%x%x%x$") then
+      group = notebook_highlights[color] or ("SeijakuNotebookChip_" .. color:sub(2))
+      vim.api.nvim_set_hl(0, group, { fg = "#faf8f2", bg = color, bold = true })
+      notebook_highlights[color] = group
+    end
+    table.insert(chunks, { " " .. book_name .. " ", group })
   end
   for _, tag in ipairs(tags or {}) do
     table.insert(chunks, { " " .. tag .. " ", tag_highlights[tag] or "SeijakuTag" })
@@ -888,90 +644,160 @@ function M.sync_metadata(note, bufnr, opts)
   return true
 end
 
+local function template_choices()
+  local templates = ((state_mod.get().config.notes or {}).templates or {})
+  local keys = {}
+  for key in pairs(templates) do
+    if type(key) == "string" and key ~= "" and not key:find("[`%c]") then
+      table.insert(keys, key)
+    end
+  end
+  table.sort(keys)
+  local result = {}
+  for _, key in ipairs(keys) do
+    if key == "blank" then
+      table.insert(result, 1, { value = key, label = "Blank", icon = "·" })
+    else
+      table.insert(result, { value = key, label = key:gsub("^%l", string.upper), icon = "◇" })
+    end
+  end
+  return result
+end
+
+local function commit_note(opts, template_id, notebook_id, tags, title)
+  title = vim.trim(tostring(title or ""))
+  if title == "" or title:find("[%c]") then
+    util.notify("note title must be a single non-empty line", vim.log.levels.ERROR)
+    return nil
+  end
+  local state = state_mod.get()
+  local templates = ((state.config.notes or {}).templates or {})
+  if opts.calendar_date and not calendar.parse(opts.calendar_date) then
+    util.notify("invalid calendar date: " .. tostring(opts.calendar_date), vim.log.levels.ERROR)
+    return nil
+  end
+  if templates[template_id] == nil then
+    util.notify("unknown template: " .. tostring(template_id), vim.log.levels.ERROR)
+    return nil
+  end
+  if notebook_id and not index.get_notebook(notebook_id) then
+    util.notify("notebook no longer exists: " .. tostring(notebook_id), vim.log.levels.ERROR)
+    return nil
+  end
+  local normalized_tags, seen = {}, {}
+  for _, value in ipairs(tags or {}) do
+    local tag = vim.trim(tostring(value)):lower()
+    if tag:find("[`,%c]") then
+      util.notify("invalid tag: " .. tag, vim.log.levels.ERROR)
+      return nil
+    end
+    if tag ~= "" and not seen[tag] then
+      table.insert(normalized_tags, tag)
+      seen[tag] = true
+    end
+  end
+  table.sort(normalized_tags)
+
+  local note_id, rel_path, abs_path
+  repeat
+    note_id = M.generate_id()
+    rel_path = M.note_relative_path(note_id)
+    abs_path = paths.join(state.vault_dir, rel_path)
+  until not index.get_note(note_id) and vim.fn.filereadable(abs_path) == 0
+  local now = util.now()
+  local note = {
+    id = note_id,
+    title = title,
+    file = rel_path,
+    created_at = now,
+    updated_at = now,
+    template_id = template_id,
+    notebook_id = notebook_id or nil,
+    calendar_date = opts.calendar_date,
+    targets = {},
+    tags = normalized_tags,
+    pinned = false,
+  }
+  local ok, body = pcall(template_lines, note, opts)
+  if not ok then
+    util.notify("template failed: " .. tostring(body), vim.log.levels.ERROR)
+    return nil
+  end
+  local initial_lines = metadata_lines(note)
+  table.insert(initial_lines, "")
+  table.insert(initial_lines, "# " .. title)
+  table.insert(initial_lines, "")
+  vim.list_extend(initial_lines, body)
+  util.write_file(abs_path, initial_lines)
+  index.add_note(note, { defer_save = true })
+  if opts.target_path then
+    local attached, attach_err = index.attach(note_id, opts.target_path, opts.target_type, { defer_save = true })
+    if not attached then
+      util.notify("target association failed: " .. tostring(attach_err), vim.log.levels.WARN)
+    end
+  end
+  local saved, save_err = index.save_sync()
+  if not saved then
+    util.notify("note saved to disk but index update failed: " .. tostring(save_err), vim.log.levels.ERROR)
+    return nil
+  end
+  if opts.open ~= false then
+    local sidebar_ok, sidebar = pcall(require, "seijaku.sidebar")
+    local opened_in_sidebar = sidebar_ok and sidebar.open_preview(note_id, { force = true, focus = true })
+    if not opened_in_sidebar then
+      M.open(note_id)
+    end
+  end
+  if opts.on_created then
+    opts.on_created(note)
+  end
+  refresh_sidebar()
+  return note
+end
+
 function M.create(opts)
   opts = opts or {}
-
-  prompt_note(opts.note_type, opts, function(note_type, title)
-    if note_type == "todo" then
-      require("seijaku.todos").create({
-        text = title,
-        calendar_date = opts.calendar_date,
-        target_path = opts.target_path,
-        target_type = opts.target_type,
-        on_created = opts.on_created,
-      })
+  if opts.prompt == false then
+    return commit_note(opts, opts.template_id or "blank", opts.notebook_id, opts.tags, opts.title)
+  end
+  return picker.note_form({
+    title = opts.title,
+    template_id = opts.template_id or "blank",
+    notebook_id = opts.notebook_id,
+    target_path = opts.target_path,
+    tags = opts.tags,
+    templates = template_choices(),
+    notebooks = index.list_notebooks(),
+    available_tags = index.list_tags(),
+    tag_color = index.get_tag_color,
+    create_notebook = function(name, path)
+      return index.create_notebook({ name = name, path = path })
+    end,
+  }, function(values)
+    if not values then
       return
     end
-
-    local state = state_mod.get()
-    local note_id = M.generate_id()
-    local rel_path = M.note_relative_path(note_id)
-    local abs_path = paths.join(state.vault_dir, rel_path)
-    local now = util.now()
-
-    local note = {
-      id = note_id,
-      title = title,
-      file = rel_path,
-      created_at = now,
-      updated_at = now,
-      note_type = note_type,
-      calendar_date = opts.calendar_date,
-      targets = {},
-      tags = {},
-      pinned = false,
-    }
-
-    local initial_lines = {}
-    vim.list_extend(initial_lines, metadata_lines(note))
-    table.insert(initial_lines, "")
-    table.insert(initial_lines, "# " .. title)
-    table.insert(initial_lines, "")
-    vim.list_extend(initial_lines, template_lines(note, opts))
-    util.write_file(abs_path, initial_lines)
-
-    index.add_note(note, { defer_save = true })
-
-    if opts.target_path then
-      index.attach(note_id, opts.target_path, opts.target_type, { defer_save = true })
+    local request = vim.deepcopy(opts)
+    request.title = values.title
+    request.template_id = values.template_id
+    request.notebook_id = values.notebook_id
+    request.tags = values.tags
+    request.target_path = values.target_path ~= "" and paths.normalize(values.target_path) or nil
+    if values.target_path ~= "" and not request.target_path then
+      util.notify("invalid target path: " .. tostring(values.target_path), vim.log.levels.ERROR)
+      return
     end
-
-    index.save_sync()
-
-    if opts.open ~= false then
-      local sidebar_ok, sidebar = pcall(require, "seijaku.sidebar")
-      local opened_in_sidebar = sidebar_ok and sidebar.open_preview(note_id, {
-        force = true,
-        focus = true,
-      })
-
-      if not opened_in_sidebar then
-        M.open(note_id)
-      end
-    end
-
-    if opts.on_created then
-      opts.on_created(note)
-    end
-
-    refresh_sidebar()
+    request.target_type = request.target_path and paths.target_type(request.target_path) or nil
+    commit_note(request, request.template_id, request.notebook_id, request.tags, request.title)
   end)
 end
 
 function M.create_global()
-  return M.create({
-    title = "note-",
-  })
+  return M.create({})
 end
 
 function M.create_for_target(target_path, target_type)
-  local title = paths.basename(target_path) or "note-"
-
-  return M.create({
-    title = title,
-    target_path = target_path,
-    target_type = target_type,
-  })
+  return M.create({ target_path = target_path, target_type = target_type })
 end
 
 function M.create_for_path(target_path)
@@ -983,6 +809,107 @@ function M.create_for_path(target_path)
   end
 
   return M.create_for_target(normalized, paths.target_type(normalized))
+end
+
+function M.manage_notebooks()
+  local choices = {}
+  for _, notebook in ipairs(index.list_notebooks()) do
+    table.insert(choices, {
+      value = notebook.id,
+      label = notebook.name .. (notebook.path and ("  " .. notebook.path) or ""),
+      icon = "◆",
+      color = notebook.color,
+    })
+  end
+  table.insert(choices, { value = "new", label = "New notebook", icon = "+" })
+
+  return picker.select(choices, { title = " notebooks " }, function(choice)
+    if not choice then
+      return
+    end
+    if choice.value == "new" then
+      picker.input({ title = " notebook name " }, function(name)
+        if not name then
+          return
+        end
+        picker.input({ title = " notebook directory · optional ", allow_empty = true }, function(path)
+          if path == nil then
+            return
+          end
+          local notebook, err = index.create_notebook({ name = name, path = path ~= "" and path or nil })
+          if not notebook then
+            util.notify("notebook: " .. tostring(err), vim.log.levels.ERROR)
+            return
+          end
+          refresh_sidebar()
+        end)
+      end)
+      return
+    end
+
+    local notebook = index.get_notebook(choice.value)
+    if not notebook then
+      return
+    end
+    picker.select({
+      { value = "open", label = "Open working directory", icon = "↗" },
+      { value = "edit", label = "Edit name and directory", icon = "◇" },
+      { value = "delete", label = "Delete notebook", icon = "×" },
+    }, { title = " " .. notebook.name .. " " }, function(action)
+      if not action then
+        return
+      end
+      if action.value == "open" then
+        if not notebook.path then
+          util.notify("notebook has no working directory", vim.log.levels.INFO)
+          return
+        end
+        local ok, oil = pcall(require, "oil")
+        if not ok then
+          util.notify("oil.nvim is not available", vim.log.levels.WARN)
+          return
+        end
+        local opened, err = pcall(oil.open, notebook.path)
+        if not opened then
+          util.notify("failed to open notebook directory: " .. tostring(err), vim.log.levels.ERROR)
+        end
+      elseif action.value == "edit" then
+        picker.input({ title = " notebook name ", default = notebook.name }, function(name)
+          if not name then
+            return
+          end
+          picker.input({
+            title = " notebook directory · optional ",
+            default = notebook.path or "",
+            allow_empty = true,
+          }, function(path)
+            if path == nil then
+              return
+            end
+            local ok, err = index.update_notebook(notebook.id, {
+              name = name,
+              path = path ~= "" and path or false,
+            })
+            if not ok then
+              util.notify("notebook: " .. tostring(err), vim.log.levels.ERROR)
+              return
+            end
+            refresh_sidebar()
+          end)
+        end)
+      elseif action.value == "delete" then
+        if vim.fn.confirm("Delete notebook '" .. notebook.name .. "'? Notes stay intact.", "&Delete\n&Cancel", 2) ~= 1 then
+          return
+        end
+        local ok, err = index.delete_notebook(notebook.id)
+        if not ok then
+          util.notify("notebook: " .. tostring(err), vim.log.levels.ERROR)
+          return
+        end
+        refresh_sidebar()
+      end
+    end)
+  end)
 end
 
 function M.apply_window_options(win)

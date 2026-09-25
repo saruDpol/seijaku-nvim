@@ -9,24 +9,30 @@ local reload_timer = nil
 local vault_watcher = nil
 local pending_upserts = {}
 local pending_deletes = {}
-local pending_todo_upserts = {}
-local pending_todo_deletes = {}
 local pending_tag_colors = {}
+local pending_notebook_upserts = {}
+local pending_notebook_deletes = {}
 local last_index_raw = nil
 local note_query_cache = {}
+local schema_version = 5
+
+local notebook_palette = {
+  "#795548", "#66558a", "#3e6d78", "#5f7848", "#926449", "#875770",
+  "#466b8a", "#857245", "#6d596b", "#49766a", "#805b4c", "#586888",
+}
 
 local tag_palette = {
   "#795548", "#66558a", "#3e6d78", "#5f7848", "#926449", "#875770",
   "#466b8a", "#857245", "#6d596b", "#49766a", "#805b4c", "#586888",
 }
 
-local function valid_tag_color(color)
+local function valid_color(color)
   return type(color) == "string" and color:match("^#%x%x%x%x%x%x$") ~= nil
 end
 
 local function assign_tag_color(index, tag)
   index.tag_colors = index.tag_colors or {}
-  if valid_tag_color(index.tag_colors[tag]) then
+  if valid_color(index.tag_colors[tag]) then
     return false
   end
   local color = tag_palette[math.random(#tag_palette)]
@@ -69,14 +75,13 @@ end
 
 local function empty_index()
   return {
-    version = 3,
+    version = schema_version,
     created_at = util.now(),
     updated_at = util.now(),
     notes = {},
-    todos = {},
+    notebooks = {},
     tag_colors = {},
     targets = {},
-    todo_targets = {},
     target_dirs = {},
   }
 end
@@ -100,10 +105,25 @@ local function read_index_file(state)
     return nil, raw, "failed to parse " .. state.index_path .. "; the file was left unchanged"
   end
 
+  local version = decoded.version == nil and 1 or tonumber(decoded.version)
+  if not version or version < 1 or version % 1 ~= 0 then
+    return nil, raw, "invalid index version in " .. state.index_path .. "; the file was left unchanged"
+  end
+  if version > schema_version then
+    return nil, raw, "unsupported index version " .. tostring(version) .. "; the file was left unchanged"
+  end
+  if decoded.notes ~= nil and type(decoded.notes) ~= "table" then
+    return nil, raw, "invalid notes in " .. state.index_path .. "; the file was left unchanged"
+  end
   decoded.notes = decoded.notes or {}
-  decoded.todos = decoded.todos or {}
-  decoded.tag_colors = decoded.tag_colors or {}
-  decoded.version = math.max(tonumber(decoded.version) or 1, 3)
+  decoded.todos = nil
+  decoded.todo_targets = nil
+  if decoded.notebooks ~= nil and type(decoded.notebooks) ~= "table" then
+    return nil, raw, "invalid notebooks in " .. state.index_path .. "; the file was left unchanged"
+  end
+  decoded.notebooks = decoded.notebooks or {}
+  decoded.tag_colors = type(decoded.tag_colors) == "table" and decoded.tag_colors or {}
+  decoded.version = version
   return decoded, raw
 end
 
@@ -123,23 +143,18 @@ local function queue_delete(note_id)
   pending_deletes[note_id] = true
 end
 
-local function queue_todo_upsert(todo)
-  if not todo or not todo.id then
-    return
-  end
-  pending_todo_deletes[todo.id] = nil
-  pending_todo_upserts[todo.id] = vim.deepcopy(todo)
+local function queue_notebook_upsert(notebook)
+  pending_notebook_deletes[notebook.id] = nil
+  pending_notebook_upserts[notebook.id] = vim.deepcopy(notebook)
 end
 
-local function queue_todo_delete(todo_id)
-  if not todo_id then
-    return
-  end
-  pending_todo_upserts[todo_id] = nil
-  pending_todo_deletes[todo_id] = true
+local function queue_notebook_delete(notebook_id)
+  pending_notebook_upserts[notebook_id] = nil
+  pending_notebook_deletes[notebook_id] = true
 end
 
 local function apply_pending(index)
+  local detached_note_ids = {}
   index.notes = index.notes or {}
   for note_id, _ in pairs(pending_deletes) do
     index.notes[note_id] = nil
@@ -147,34 +162,41 @@ local function apply_pending(index)
   for note_id, note in pairs(pending_upserts) do
     index.notes[note_id] = vim.deepcopy(note)
   end
-  index.todos = index.todos or {}
-  for todo_id, _ in pairs(pending_todo_deletes) do
-    index.todos[todo_id] = nil
+  index.notebooks = index.notebooks or {}
+  for notebook_id, _ in pairs(pending_notebook_deletes) do
+    index.notebooks[notebook_id] = nil
   end
-  for todo_id, todo in pairs(pending_todo_upserts) do
-    index.todos[todo_id] = vim.deepcopy(todo)
+  for notebook_id, notebook in pairs(pending_notebook_upserts) do
+    index.notebooks[notebook_id] = vim.deepcopy(notebook)
+  end
+  for note_id, note in pairs(index.notes) do
+    if note.notebook_id and pending_notebook_deletes[note.notebook_id] then
+      note.notebook_id = nil
+      note.updated_at = util.now()
+      table.insert(detached_note_ids, note_id)
+    end
   end
   index.tag_colors = index.tag_colors or {}
   for tag, color in pairs(pending_tag_colors) do
     index.tag_colors[tag] = color
   end
-  return index
+  return index, detached_note_ids
 end
 
 local function clear_pending()
   pending_upserts = {}
   pending_deletes = {}
-  pending_todo_upserts = {}
-  pending_todo_deletes = {}
   pending_tag_colors = {}
+  pending_notebook_upserts = {}
+  pending_notebook_deletes = {}
 end
 
 local function has_pending()
   return next(pending_upserts) ~= nil
     or next(pending_deletes) ~= nil
-    or next(pending_todo_upserts) ~= nil
-    or next(pending_todo_deletes) ~= nil
     or next(pending_tag_colors) ~= nil
+    or next(pending_notebook_upserts) ~= nil
+    or next(pending_notebook_deletes) ~= nil
 end
 
 local function acquire_index_lock(state)
@@ -229,11 +251,6 @@ local function parse_note_metadata(lines)
     elseif line == "<!-- seijaku:metadata:end -->" then
       break
     elseif in_block then
-      local note_type = line:match("^> Type:%s*`([^`]+)`")
-      if note_type then
-        metadata.note_type = note_type
-      end
-
       local created_at = line:match("^> Created:%s*`([^`]+)`")
       if created_at then
         metadata.created_at = created_at
@@ -255,6 +272,16 @@ local function parse_note_metadata(lines)
       local calendar_date = line:match("^> Date:%s*`([^`]+)`")
       if calendar_date then
         metadata.calendar_date = calendar_date
+      end
+
+      local notebook_id = line:match("^> Notebook:%s*`([^`]+)`")
+      if notebook_id then
+        metadata.notebook_id = notebook_id
+      end
+
+      local template_id = line:match("^> Template:%s*`([^`]+)`")
+      if template_id then
+        metadata.template_id = template_id
       end
 
       local tags = line:match("^> Tags:%s*(.+)$")
@@ -299,8 +326,9 @@ local function note_from_file(state, rel_path)
     file = rel_path,
     created_at = metadata.created_at or util.now(),
     updated_at = metadata.updated_at or metadata.created_at or util.now(),
-    note_type = metadata.note_type or "general",
     calendar_date = metadata.calendar_date,
+    notebook_id = metadata.notebook_id,
+    template_id = metadata.template_id,
     targets = metadata.targets or {},
     tags = metadata.tags or {},
     pinned = metadata.pinned == true,
@@ -309,7 +337,7 @@ end
 
 local function structural_save()
   state_mod.mark_dirty()
-  M.save_sync()
+  return M.save_sync()
 end
 
 function M.ensure_vault()
@@ -318,8 +346,6 @@ function M.ensure_vault()
 
   util.mkdir_p(vault)
   util.mkdir_p(paths.join(vault, "notes"))
-  util.mkdir_p(paths.join(vault, "backups", "canonical"))
-  util.mkdir_p(paths.join(vault, "backups", "snapshots"))
 
   if vim.fn.filereadable(state.index_path) == 0 then
     local initial = empty_index()
@@ -333,16 +359,24 @@ function M.load()
   clear_pending()
   last_index_raw = nil
   local state = state_mod.get()
-  local decoded, raw, err = read_index_file(state)
+	local decoded, raw, err = read_index_file(state)
 
   if not decoded then
     state.index = nil
     return false, err
   end
 
-  state.index = apply_pending(decoded)
+	local loaded_version = decoded.version
+	state.index = apply_pending(decoded)
   last_index_raw = raw
   M.rebuild_derived_indexes()
+	if loaded_version < schema_version then
+    local saved, save_err = M.save_sync({ force = true })
+    if not saved then
+      return false, save_err
+    end
+    return true
+  end
   if next(pending_tag_colors) ~= nil then
     state_mod.mark_dirty()
     M.schedule_save()
@@ -356,20 +390,19 @@ function M.rebuild_derived_indexes()
 
   invalidate_note_queries()
   index.notes = index.notes or {}
-  index.todos = index.todos or {}
+  index.notebooks = index.notebooks or {}
   index.tag_colors = index.tag_colors or {}
   index.targets = {}
-  index.todo_targets = {}
   index.target_dirs = {}
+  index.version = schema_version
 
   state.notes_by_id = index.notes
-  state.todos_by_id = index.todos
+  state.notebooks_by_id = index.notebooks
   state.notes_by_file = {}
   state.note_ids_by_target = index.targets
-  state.todo_ids_by_target = index.todo_targets
   state.target_paths_by_dir = {}
   state.note_ids_by_date = {}
-  state.todo_ids_by_date = {}
+  state.note_ids_by_notebook = {}
   state.calendar_counts_by_month = {}
 
   local function add_date_item(collection, date, id)
@@ -401,7 +434,12 @@ function M.rebuild_derived_indexes()
     for _, tag in ipairs(tags) do
       assign_tag_color(index, tag)
     end
+    note.note_type = nil
     note.pinned = note.pinned == true
+    if note.notebook_id then
+      state.note_ids_by_notebook[note.notebook_id] = state.note_ids_by_notebook[note.notebook_id] or {}
+      table.insert(state.note_ids_by_notebook[note.notebook_id], note.id)
+    end
     add_date_item(state.note_ids_by_date, M.calendar_date(note), note.id)
     if note.file then
       local abs_note_path = paths.normalize(paths.join(state.vault_dir, note.file))
@@ -417,21 +455,6 @@ function M.rebuild_derived_indexes()
       if target_path then
         index.targets[target_path] = index.targets[target_path] or {}
         table.insert(index.targets[target_path], note.id)
-        target.path = target_path
-        target.type = target.type or paths.target_type(target_path)
-      end
-    end
-  end
-
-  for _, todo in pairs(index.todos) do
-    todo.pinned = todo.pinned == true
-    add_date_item(state.todo_ids_by_date, M.todo_date(todo), todo.id)
-    for _, target in ipairs(todo.targets or {}) do
-      local target_path = paths.normalize(target.path)
-
-      if target_path then
-        index.todo_targets[target_path] = index.todo_targets[target_path] or {}
-        table.insert(index.todo_targets[target_path], todo.id)
         target.path = target_path
         target.type = target.type or paths.target_type(target_path)
       end
@@ -460,10 +483,6 @@ function M.rebuild_derived_indexes()
   for target_path, _ in pairs(index.targets) do
     all_target_paths[target_path] = true
   end
-  for target_path, _ in pairs(index.todo_targets) do
-    all_target_paths[target_path] = true
-  end
-
   for target_path, _ in pairs(all_target_paths) do
     local normalized = paths.normalize(target_path)
     local target_type = paths.target_type(normalized)
@@ -523,13 +542,23 @@ function M.save_sync(opts)
     return false, read_err
   end
 
-  state.index = apply_pending(latest)
+  if latest.version < schema_version then
+    latest.version = schema_version
+  end
+
+  local detached_note_ids
+  state.index, detached_note_ids = apply_pending(latest)
   M.rebuild_derived_indexes()
   local ok, write_err = write_index_sync()
   if ok then
     clear_pending()
   end
   release_index_lock(lock_path)
+  if ok then
+    for _, note_id in ipairs(detached_note_ids) do
+      sync_note_metadata(state.notes_by_id[note_id])
+    end
+  end
   return ok, write_err
 end
 
@@ -577,9 +606,17 @@ function M.reload_if_changed()
     return false
   end
 
-  state.index = apply_pending(latest)
-  last_index_raw = raw
-  M.rebuild_derived_indexes()
+  if latest.version < schema_version then
+    local migrated, migration_err = M.save_sync({ force = true })
+    if not migrated then
+      util.notify("external index migration failed: " .. tostring(migration_err), vim.log.levels.ERROR)
+      return false, migration_err
+    end
+  else
+    state.index = apply_pending(latest)
+    last_index_raw = raw
+    M.rebuild_derived_indexes()
+  end
   local ok_notes, notes = pcall(require, "seijaku.notes")
   if ok_notes and type(notes.define_tag_highlights) == "function" then
     notes.define_tag_highlights()
@@ -668,7 +705,7 @@ end
 function M.mark_dirty_sync(note)
   invalidate_note_queries()
   queue_upsert(note)
-  structural_save()
+  return structural_save()
 end
 
 function M.add_note(note, opts)
@@ -703,6 +740,159 @@ function M.get_note(note_id)
   return state.notes_by_id[note_id]
 end
 
+local function notebook_name(value)
+  if type(value) ~= "string" then
+    return nil
+  end
+  local name = vim.trim(value)
+  if name == "" or name:find("%c") then
+    return nil
+  end
+  return name
+end
+
+function M.get_notebook(notebook_id)
+  return state_mod.get().notebooks_by_id[notebook_id]
+end
+
+function M.list_notebooks()
+  local result = {}
+  for _, notebook in pairs(state_mod.get().notebooks_by_id or {}) do
+    table.insert(result, notebook)
+  end
+  table.sort(result, function(a, b)
+    local a_name = (a.name or ""):lower()
+    local b_name = (b.name or ""):lower()
+    if a_name ~= b_name then
+      return a_name < b_name
+    end
+    return a.id < b.id
+  end)
+  return result
+end
+
+local function notebook_name_exists(name, except_id)
+  for id, notebook in pairs(state_mod.get().notebooks_by_id or {}) do
+    if id ~= except_id and (notebook.name or ""):lower() == name:lower() then
+      return true
+    end
+  end
+  return false
+end
+
+function M.create_notebook(opts)
+  opts = opts or {}
+  local name = notebook_name(opts.name)
+  if not name then
+    return nil, "notebook name must be non-empty and contain no control characters"
+  end
+  if notebook_name_exists(name) then
+    return nil, "notebook name already exists"
+  end
+  if opts.color ~= nil and not valid_color(opts.color) then
+    return nil, "notebook color must be a #RRGGBB value"
+  end
+  if opts.path ~= nil and type(opts.path) ~= "string" then
+    return nil, "notebook path must be a string"
+  end
+  local path = opts.path and paths.normalize(opts.path) or nil
+  if opts.path and not path then
+    return nil, "invalid notebook path"
+  end
+  local id
+  repeat
+    id = "book_" .. util.random_hex(16)
+  until not M.get_notebook(id)
+  local now = util.now()
+  local notebook = {
+    id = id,
+    name = name,
+    path = path,
+    color = opts.color or notebook_palette[(tonumber(id:sub(-2), 16) % #notebook_palette) + 1],
+    created_at = now,
+    updated_at = now,
+  }
+  state_mod.get().index.notebooks[id] = notebook
+  queue_notebook_upsert(notebook)
+  local saved, err = structural_save()
+  if not saved then
+    return nil, err
+  end
+  return M.get_notebook(id)
+end
+
+function M.update_notebook(notebook_id, changes)
+  local notebook = M.get_notebook(notebook_id)
+  if not notebook then
+    return false, "notebook not found"
+  end
+  changes = changes or {}
+  local name, path, color = notebook.name, notebook.path, notebook.color
+  if changes.name ~= nil then
+    name = notebook_name(changes.name)
+    if not name then
+      return false, "notebook name must be non-empty and contain no control characters"
+    end
+    if notebook_name_exists(name, notebook_id) then
+      return false, "notebook name already exists"
+    end
+  end
+  if changes.path ~= nil then
+    if changes.path == false or changes.path == "" then
+      path = nil
+    else
+      if type(changes.path) ~= "string" then
+        return false, "notebook path must be a string"
+      end
+      path = paths.normalize(changes.path)
+      if not path then
+        return false, "invalid notebook path"
+      end
+    end
+  end
+  if changes.color ~= nil then
+    if not valid_color(changes.color) then
+      return false, "notebook color must be a #RRGGBB value"
+    end
+    color = changes.color
+  end
+  notebook.name = name
+  notebook.path = path
+  notebook.color = color
+  notebook.updated_at = util.now()
+  queue_notebook_upsert(notebook)
+  return structural_save()
+end
+
+function M.delete_notebook(notebook_id)
+  if not M.get_notebook(notebook_id) then
+    return false, "notebook not found"
+  end
+  queue_notebook_delete(notebook_id)
+  return structural_save()
+end
+
+function M.assign_notebook(note_id, notebook_id)
+  local note = M.get_note(note_id)
+  if not note then
+    return false, "note not found"
+  end
+  if notebook_id ~= nil and not M.get_notebook(notebook_id) then
+    return false, "notebook not found"
+  end
+  if note.notebook_id == notebook_id then
+    return true
+  end
+  note.notebook_id = notebook_id
+  note.updated_at = util.now()
+  local saved, err = M.mark_dirty_sync(note)
+  if not saved then
+    return false, err
+  end
+  sync_note_metadata(note)
+  return true
+end
+
 function M.get_note_for_file(file_path)
   local state = state_mod.get()
   local normalized = paths.normalize(file_path)
@@ -726,8 +916,15 @@ function M.touch_note_for_file(file_path)
   return true
 end
 
-local function normalized_note_type(note)
-  return note and note.note_type or "general"
+local function note_matches_scope(note, opts)
+  opts = opts or {}
+  local tag = opts.tag or "all"
+  local notebook_id = opts.notebook_id
+  local tag_matches = tag == "all" or vim.tbl_contains(note.tags or {}, tag)
+  local notebook_matches = notebook_id == nil
+    or (notebook_id == false and note.notebook_id == nil)
+    or note.notebook_id == notebook_id
+  return tag_matches and notebook_matches
 end
 
 local function note_comparator(sort)
@@ -796,21 +993,32 @@ function M.query_notes(opts)
   if sort ~= "date" and sort ~= "created" then
     sort = "updated"
   end
-  local filter = opts.filter or "all"
   local tag = opts.tag or "all"
-  local cache_key = sort .. "\0" .. filter .. "\0" .. tag
+  local notebook_id = opts.notebook_id
+  local cache_key = sort .. "\0" .. tag .. "\0" .. tostring(notebook_id)
   local cached = note_query_cache[cache_key]
   if cached then
     return cached
   end
 
   local result = {}
-
-  for _, note in pairs(state_mod.get().notes_by_id or {}) do
-    local type_matches = filter == "all" or normalized_note_type(note) == filter
-    local tag_matches = tag == "all" or vim.tbl_contains(note.tags or {}, tag)
-    if type_matches and tag_matches then
+  local state = state_mod.get()
+  local function include(note)
+    if not note then
+      return
+    end
+    if note_matches_scope(note, { tag = tag, notebook_id = notebook_id }) then
       table.insert(result, note)
+    end
+  end
+
+  if notebook_id and notebook_id ~= false then
+    for _, note_id in ipairs(state.note_ids_by_notebook[notebook_id] or {}) do
+      include(state.notes_by_id[note_id])
+    end
+  else
+    for _, note in pairs(state.notes_by_id or {}) do
+      include(note)
     end
   end
 
@@ -819,191 +1027,18 @@ function M.query_notes(opts)
   return result
 end
 
+function M.get_notes_for_notebook(notebook_id, opts)
+  opts = vim.tbl_extend("force", opts or {}, { notebook_id = notebook_id })
+  return M.query_notes(opts)
+end
+
 function M.list_notes()
-  local cached = M.query_notes({ sort = "updated", filter = "all" })
+  local cached = M.query_notes({ sort = "updated" })
   local result = {}
   for i, note in ipairs(cached) do
     result[i] = note
   end
   return result
-end
-
-function M.add_todo(todo, opts)
-  opts = opts or {}
-  if not todo or not todo.id then
-    return false, "invalid todo"
-  end
-
-  local state = state_mod.get()
-  todo.pinned = todo.pinned == true
-  state.index.todos = state.index.todos or {}
-  state.index.todos[todo.id] = todo
-  state.todos_by_id[todo.id] = todo
-  M.rebuild_derived_indexes()
-  queue_todo_upsert(todo)
-
-  if opts.defer_save then
-    state_mod.mark_dirty()
-  else
-    structural_save()
-  end
-  return true
-end
-
-function M.get_todo(todo_id)
-  return state_mod.get().todos_by_id[todo_id]
-end
-
-function M.list_todos()
-  local result = {}
-  for _, todo in pairs(state_mod.get().todos_by_id or {}) do
-    table.insert(result, todo)
-  end
-
-  table.sort(result, function(a, b)
-    if (a.pinned == true) ~= (b.pinned == true) then
-      return a.pinned == true
-    end
-    local a_date = M.todo_date(a) or ""
-    local b_date = M.todo_date(b) or ""
-    if a_date ~= b_date then
-      return a_date > b_date
-    end
-    return tostring(a.created_at or "") > tostring(b.created_at or "")
-  end)
-  return result
-end
-
-function M.todo_date(todo)
-  if todo and todo.calendar_date then
-    return todo.calendar_date
-  end
-  return todo and tostring(todo.created_at or ""):match("^(%d%d%d%d%-%d%d%-%d%d)") or nil
-end
-
-function M.get_todos_for_calendar_date(date)
-  local result = {}
-  local state = state_mod.get()
-  for _, id in ipairs(state.todo_ids_by_date[date] or {}) do
-    local todo = state.todos_by_id[id]
-    if todo then
-      table.insert(result, todo)
-    end
-  end
-
-  table.sort(result, function(a, b)
-    if (a.pinned == true) ~= (b.pinned == true) then
-      return a.pinned == true
-    end
-    return tostring(a.created_at or "") > tostring(b.created_at or "")
-  end)
-  return result
-end
-
-function M.update_todo(todo)
-  if not todo or not todo.id or not M.get_todo(todo.id) then
-    return false, "todo not found"
-  end
-  state_mod.get().index.todos[todo.id] = todo
-  state_mod.get().todos_by_id[todo.id] = todo
-  queue_todo_upsert(todo)
-  structural_save()
-  return true
-end
-
-function M.toggle_todo_pin(todo_id)
-  local todo = M.get_todo(todo_id)
-  if not todo then
-    return false, "todo not found"
-  end
-  todo.pinned = not (todo.pinned == true)
-  todo.updated_at = util.now()
-  local ok, err = M.update_todo(todo)
-  if not ok then
-    return false, err
-  end
-  return true, todo.pinned
-end
-
-function M.attach_todo(todo_id, target_path, target_type, opts)
-  opts = opts or {}
-  local todo = M.get_todo(todo_id)
-  target_path = paths.normalize(target_path)
-
-  if not todo then
-    return false, "todo not found"
-  end
-  if not target_path then
-    return false, "invalid target path"
-  end
-
-  todo.targets = todo.targets or {}
-  for _, target in ipairs(todo.targets) do
-    if target.path == target_path then
-      return true
-    end
-  end
-
-  table.insert(todo.targets, {
-    path = target_path,
-    type = target_type or paths.target_type(target_path),
-  })
-  todo.updated_at = util.now()
-  M.rebuild_derived_indexes()
-  queue_todo_upsert(todo)
-  if opts.defer_save then
-    state_mod.mark_dirty()
-  else
-    structural_save()
-  end
-  return true
-end
-
-function M.detach_todo(todo_id, target_path, opts)
-  opts = opts or {}
-  local todo = M.get_todo(todo_id)
-  target_path = paths.normalize(target_path)
-
-  if not todo or not target_path then
-    return false
-  end
-
-  local targets = {}
-  local removed = false
-  for _, target in ipairs(todo.targets or {}) do
-    if target.path == target_path then
-      removed = true
-    else
-      table.insert(targets, target)
-    end
-  end
-  if not removed then
-    return false
-  end
-
-  todo.targets = targets
-  todo.updated_at = util.now()
-  M.rebuild_derived_indexes()
-  queue_todo_upsert(todo)
-  if opts.defer_save then
-    state_mod.mark_dirty()
-  else
-    structural_save()
-  end
-  return true
-end
-
-function M.delete_todo(todo_id)
-  local state = state_mod.get()
-  if not M.get_todo(todo_id) then
-    return false, "todo not found"
-  end
-  state.index.todos[todo_id] = nil
-  state.todos_by_id[todo_id] = nil
-  M.rebuild_derived_indexes()
-  queue_todo_delete(todo_id)
-  structural_save()
-  return true
 end
 
 function M.calendar_date(note)
@@ -1014,12 +1049,12 @@ function M.calendar_date(note)
   return note and tostring(note.created_at or ""):match("^(%d%d%d%d%-%d%d%-%d%d)") or nil
 end
 
-function M.get_notes_for_calendar_date(date)
+function M.get_notes_for_calendar_date(date, opts)
   local result = {}
   local state = state_mod.get()
   for _, id in ipairs(state.note_ids_by_date[date] or {}) do
     local note = state.notes_by_id[id]
-    if note then
+    if note and note_matches_scope(note, opts) then
       table.insert(result, note)
     end
   end
@@ -1034,9 +1069,22 @@ function M.get_notes_for_calendar_date(date)
   return result
 end
 
-function M.get_calendar_counts(year, month)
+function M.get_calendar_counts(year, month, opts)
   local key = string.format("%04d-%02d", year, month)
   local counts = {}
+  if opts and (opts.tag and opts.tag ~= "all" or opts.notebook_id ~= nil) then
+    for date, ids in pairs(state_mod.get().note_ids_by_date or {}) do
+      if date:sub(1, #key) == key then
+        for _, id in ipairs(ids) do
+          local note = state_mod.get().notes_by_id[id]
+          if note and note_matches_scope(note, opts) then
+            counts[date] = (counts[date] or 0) + 1
+          end
+        end
+      end
+    end
+    return counts
+  end
   for date, count in pairs(state_mod.get().calendar_counts_by_month[key] or {}) do
     counts[date] = count
   end
@@ -1086,7 +1134,7 @@ end
 function M.get_tag_color(tag)
   local colors = state_mod.get().index and state_mod.get().index.tag_colors or {}
   local color = colors and colors[tag]
-  return valid_tag_color(color) and color or nil
+  return valid_color(color) and color or nil
 end
 
 function M.set_tags(note_id, tags)
@@ -1394,24 +1442,6 @@ function M.get_notes_for_target(target_path)
   return notes
 end
 
-function M.get_todos_for_target(target_path)
-  local state = state_mod.get()
-  target_path = paths.normalize(target_path)
-  local result = {}
-
-  for _, id in ipairs(state.todo_ids_by_target[target_path] or {}) do
-    local todo = state.todos_by_id[id]
-    if todo then
-      table.insert(result, todo)
-    end
-  end
-
-  table.sort(result, function(a, b)
-    return tostring(a.created_at or "") > tostring(b.created_at or "")
-  end)
-  return result
-end
-
 function M.get_notes_for_dir(dir_path)
   local state = state_mod.get()
   dir_path = paths.normalize(dir_path)
@@ -1440,25 +1470,6 @@ function M.get_notes_for_tree(dir_path)
   for target_path, _ in pairs(state.note_ids_by_target or {}) do
     if target_path == dir_path or target_path:sub(1, #prefix) == prefix then
       grouped[target_path] = M.get_notes_for_target(target_path)
-    end
-  end
-
-  return grouped
-end
-
-function M.get_todos_for_tree(dir_path)
-  local state = state_mod.get()
-  dir_path = paths.normalize(dir_path)
-  local grouped = {}
-
-  if not dir_path then
-    return grouped
-  end
-
-  local prefix = dir_path == "/" and "/" or dir_path .. "/"
-  for target_path, _ in pairs(state.todo_ids_by_target or {}) do
-    if target_path == dir_path or target_path:sub(1, #prefix) == prefix then
-      grouped[target_path] = M.get_todos_for_target(target_path)
     end
   end
 

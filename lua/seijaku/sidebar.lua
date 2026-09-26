@@ -17,6 +17,7 @@ local highlight_ns = vim.api.nvim_create_namespace("seijaku_sidebar")
 local selection_ns = vim.api.nvim_create_namespace("seijaku_sidebar_selection")
 local highlights_defined = false
 local notebook_hl_cache = {}
+local tag_hl_cache = {}
 
 local palettes = {
 	muted = {
@@ -53,7 +54,7 @@ local card_role_groups = {
 	tags = "SeijakuMuted",
 }
 
-local pin_icon = "󰁃"
+local pin_icon = " "
 
 local function sidebar_state()
 	return state_mod.get().sidebar
@@ -210,46 +211,20 @@ end
 local function add_header(lines, line_items)
 	local start = #lines + 1
 	local sidebar = sidebar_state()
-	local width = is_valid_win(sidebar.header_win) and vim.api.nvim_win_get_width(sidebar.header_win) or sidebar_width()
-	local left = "静寂"
-	local mode = sidebar.mode
-	local right = "seijaku"
-	local state_ranges = {}
-	if mode == "all" then
-		right = ""
-		local function append_state(label, value)
-			right = right .. label
-			local range = { start_col = #right, end_col = #right + #value }
-			right = right .. value
-			table.insert(state_ranges, range)
-		end
-		append_state("s:", tostring(sidebar.all_sort))
-		local active_tag = sidebar.all_tag or "all"
-		if active_tag ~= "all" then
-			append_state("  F:", active_tag)
-		end
-		local active_book = index.get_notebook(sidebar.all_notebook)
-		if active_book then
-			append_state("  project:", active_book.name)
-		end
-	elseif mode == "calendar" then
-		local pending = sidebar.calendar_day_input or ""
-		right = "[/] month  t today" .. (pending ~= "" and ("  day " .. pending .. "_") or "")
-	end
-	right = truncate_right(right, math.max(8, width - display_width(left) - 1))
-	local gap = math.max(1, width - display_width(left) - display_width(right))
-	table.insert(lines, left .. string.rep(" ", gap) .. right)
+	local query = vim.trim(sidebar.title_filter or "")
+	table.insert(lines, query)
 
 	line_items[start] = {
 		kind = "header",
-		brand_start = #left + gap,
-		brand_end = #left + gap + #right,
-		state_ranges = state_ranges,
+		search_start = 0,
+		search_end = #query,
+		empty_search = query == "",
 	}
 end
 
 function M.define_highlights()
 	notebook_hl_cache = {}
+	tag_hl_cache = {}
 	local appearance = (state_mod.get().config or {}).appearance or {}
 	local preset = appearance.palette or "auto"
 	if preset == "auto" then
@@ -258,14 +233,15 @@ function M.define_highlights()
 	local palette = vim.deepcopy(palettes[preset] or palettes.vivid)
 	palette = vim.tbl_extend("force", palette, appearance.colors or {})
 	vim.api.nvim_set_hl(0, "SeijakuHeader", { bold = false })
-	vim.api.nvim_set_hl(0, "SeijakuHeaderState", { fg = palette.brand, ctermfg = palette.brand_cterm, bold = true })
-	vim.api.nvim_set_hl(0, "SeijakuBrand", { fg = palette.brand, ctermfg = palette.brand_cterm, bold = false })
+	vim.api.nvim_set_hl(0, "SeijakuHeaderState", { fg = palette.active, ctermfg = palette.active_cterm, bold = true })
+	vim.api.nvim_set_hl(0, "SeijakuBrand", { link = "Normal" })
 	vim.api.nvim_set_hl(0, "SeijakuModeActive", { fg = palette.active, ctermfg = palette.active_cterm, bold = true })
 	vim.api.nvim_set_hl(0, "SeijakuMuted", { fg = palette.subtle, ctermfg = palette.subtle_cterm, italic = false })
+	vim.api.nvim_set_hl(0, "SeijakuDivider", { fg = "#2b2d31", ctermfg = 236, blend = 85, nocombine = true })
 	vim.api.nvim_set_hl(0, "SeijakuSubheader", { link = "SeijakuMuted" })
 	vim.api.nvim_set_hl(0, "SeijakuHelp", { link = "SeijakuMuted" })
 	vim.api.nvim_set_hl(0, "SeijakuSection", { link = "Title" })
-	vim.api.nvim_set_hl(0, "SeijakuTarget", { link = "SeijakuMuted" })
+	vim.api.nvim_set_hl(0, "SeijakuTarget", { fg = "#d47761", ctermfg = 173 })
 	vim.api.nvim_set_hl(0, "SeijakuMissingTarget", { link = "DiagnosticWarn" })
 	vim.api.nvim_set_hl(0, "SeijakuNote", { link = "Normal" })
 	vim.api.nvim_set_hl(0, "SeijakuCalendarMonth", { fg = palette.brand, ctermfg = palette.brand_cterm })
@@ -275,6 +251,11 @@ function M.define_highlights()
 		"SeijakuCalendarSelected",
 		{ fg = palette.active, ctermfg = palette.active_cterm, bold = true }
 	)
+	vim.api.nvim_set_hl(0, "SeijakuSelectorSelected", {
+		fg = "#ffffff",
+		bg = palette.brand,
+		bold = true,
+	})
 	vim.api.nvim_set_hl(0, "SeijakuCalendarHasNotes", { link = "Function" })
 	vim.api.nvim_set_hl(0, "SeijakuPinned", { fg = palette.pinned, ctermfg = palette.pinned_cterm, bold = true })
 	vim.api.nvim_set_hl(0, "SeijakuPinnedBlock", { fg = "#faf8f2", bg = palette.pinned, bold = true })
@@ -305,6 +286,8 @@ local function apply_highlights(buf, lines, line_items)
 	local highlight_by_kind = {
 		subheader = "SeijakuSubheader",
 		rule = "SeijakuHelp",
+		divider = "SeijakuDivider",
+		sort_indicator = "SeijakuMuted",
 		help = "SeijakuHelp",
 		section = "SeijakuSection",
 		target = "SeijakuTarget",
@@ -349,24 +332,26 @@ local function apply_highlights(buf, lines, line_items)
 				hl_mode = "replace",
 				priority = 100,
 			})
-			vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, item.brand_start, {
-				end_col = item.brand_end,
-				hl_group = "SeijakuBrand",
-				hl_mode = "replace",
-				priority = 110,
-			})
-			for _, range in ipairs(item.state_ranges or {}) do
-				local start_col = item.brand_start + range.start_col
-				local end_col = math.min(item.brand_start + range.end_col, #lines[line])
-				if start_col < end_col then
-					vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, start_col, {
-						end_col = end_col,
-						hl_group = "SeijakuHeaderState",
-						hl_mode = "replace",
-						priority = 120,
-					})
-				end
+			if item.search_end > item.search_start then
+				vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, item.search_start, {
+					end_col = item.search_end,
+					hl_group = "SeijakuHeaderState",
+					hl_mode = "combine",
+					priority = 120,
+				})
 			end
+			if item.empty_search then
+				vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, 0, {
+					virt_text = { { "⌕ search notes", "SeijakuMuted" } },
+					virt_text_pos = "overlay",
+					priority = 120,
+				})
+			end
+			vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, 0, {
+				virt_text = { { "静寂", "SeijakuBrand" } },
+				virt_text_pos = "right_align",
+				priority = 130,
+			})
 		end
 
 		if item and item.kind == "note" and item.card_role then
@@ -492,6 +477,45 @@ local function target_exists(target_path, cache)
 	return exists
 end
 
+local function append_note_dividers(lines, line_items, count)
+	local rule = string.rep("─", math.max(1, sidebar_width()))
+	for _ = 1, count or 1 do
+		table.insert(lines, rule)
+		line_items[#lines] = { kind = "divider" }
+	end
+end
+
+local function append_sort_indicator(lines, line_items)
+	local sort = sidebar_state().all_sort or "updated"
+	table.insert(lines, "· " .. sort)
+	line_items[#lines] = { kind = "sort_indicator" }
+end
+
+local function note_matches_search(note, query)
+	query = vim.trim(tostring(query or "")):lower()
+	if query == "" then
+		return true
+	end
+	local values = { note.title, note.file, note.notebook_id }
+	local notebook = note.notebook_id and index.get_notebook(note.notebook_id) or nil
+	if notebook then
+		table.insert(values, notebook.name)
+		table.insert(values, notebook.path)
+	end
+	for _, tag in ipairs(note.tags or {}) do
+		table.insert(values, tag)
+	end
+	for _, target in ipairs(note.targets or {}) do
+		table.insert(values, target.path)
+	end
+	for _, value in ipairs(values) do
+		if tostring(value or ""):lower():find(query, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
 function M.render_all()
 	local state = state_mod.get()
 	local limit = state.config.sidebar.all_mode_limit or 500
@@ -501,6 +525,7 @@ function M.render_all()
 		sort = "updated"
 	end
 	sidebar_state().all_sort = sort
+	append_sort_indicator(lines, line_items)
 	local all_tag = sidebar_state().all_tag or "all"
 	local all_notebook = sidebar_state().all_notebook or "all"
 	if all_notebook ~= "all" and not index.get_notebook(all_notebook) then
@@ -512,17 +537,28 @@ function M.render_all()
 		tag = all_tag,
 		notebook_id = all_notebook ~= "all" and all_notebook or nil,
 	})
+	local title_filter = sidebar_state().title_filter or ""
+	if vim.trim(title_filter) ~= "" then
+		all_notes = vim.tbl_filter(function(note)
+			return note_matches_search(note, title_filter)
+		end, all_notes)
+	end
 	if #all_notes == 0 then
 		table.insert(lines, next(state.notes_by_id or {}) and "No notes for this filter" or "No notes yet")
 		line_items[#lines] = { kind = "help" }
 	else
+		local previous_pinned = nil
 		for i, note in ipairs(all_notes) do
 			if i > limit then
 				table.insert(lines, string.format("Showing %d of %d notes", limit, #all_notes))
 				line_items[#lines] = { kind = "help" }
 				break
 			end
+			if i > 1 then
+				append_note_dividers(lines, line_items, 1)
+			end
 			append_note_card(lines, line_items, note, exists_cache)
+			previous_pinned = note.pinned
 		end
 	end
 	return lines, line_items
@@ -608,7 +644,8 @@ append_note_card = function(lines, line_items, note, exists_cache)
 	if note.notebook_id then
 		local book = index.get_notebook(note.notebook_id)
 		title_details.project_start = #title_prefix
-		title_prefix = title_prefix .. "● "
+		local project_icon = book and book.icon or nil
+		title_prefix = title_prefix .. (project_icon or "●") .. " "
 		title_details.project_end = #title_prefix - 1
 		title_details.project_color = book and book.color or nil
 	end
@@ -741,6 +778,9 @@ function M.redirect_sidebar_entry(from_win, entered_win)
 
 	if entered_win == sidebar.win then
 		return M.redirect_calendar_entry(from_win, entered_win)
+	end
+	if entered_win == sidebar.header_win and sidebar.search_active then
+		return false
 	end
 	if entered_win ~= sidebar.header_win and entered_win ~= sidebar.notebook_win and entered_win ~= sidebar.tag_win then
 		return false
@@ -879,15 +919,25 @@ function M.render_calendar_notes()
 	local sidebar = sidebar_state()
 	local date = sidebar.calendar_date
 	local day_notes = index.get_notes_for_calendar_date(date, active_scope())
+	local title_filter = sidebar.title_filter or ""
+	if vim.trim(title_filter) ~= "" then
+		day_notes = vim.tbl_filter(function(note)
+			return note_matches_search(note, title_filter)
+		end, day_notes)
+	end
 	local lines = {}
 	local line_items = {}
 	local exists_cache = {}
+	append_sort_indicator(lines, line_items)
 
 	if #day_notes == 0 then
 		table.insert(lines, "No notes for this day")
 		line_items[#lines] = { kind = "help" }
 	else
-		for _, note in ipairs(day_notes) do
+		for note_index, note in ipairs(day_notes) do
+			if note_index > 1 then
+				append_note_dividers(lines, line_items)
+			end
 			append_note_card(lines, line_items, note, exists_cache)
 		end
 	end
@@ -1001,6 +1051,8 @@ local function panel_options(win)
 	vim.wo[win].relativenumber = false
 	vim.wo[win].signcolumn = "no"
 	vim.wo[win].wrap = false
+	vim.wo[win].cursorline = false
+	vim.wo[win].cursorcolumn = false
 end
 
 local function ensure_sidebar_panels()
@@ -1011,6 +1063,7 @@ local function ensure_sidebar_panels()
 	if not is_valid_buf(sidebar.header_buf) then
 		sidebar.header_buf = vim.api.nvim_create_buf(false, true)
 		set_sidebar_options(sidebar.header_buf)
+		vim.bo[sidebar.header_buf].modifiable = true
 	end
 	if not is_valid_win(sidebar.header_win) then
 		local current = vim.api.nvim_get_current_win()
@@ -1021,6 +1074,7 @@ local function ensure_sidebar_panels()
 		panel_options(sidebar.header_win)
 		vim.api.nvim_win_set_height(sidebar.header_win, 1)
 		vim.wo[sidebar.header_win].winfixheight = true
+		M.setup_header_mappings(sidebar.header_buf)
 		if is_valid_win(current) then
 			vim.api.nvim_set_current_win(current)
 		end
@@ -1065,9 +1119,11 @@ local function render_header_panel()
 	end
 	local lines, items = {}, {}
 	add_header(lines, items)
-	with_modifiable(sidebar.header_buf, function()
+	if not sidebar.search_active then
 		vim.api.nvim_buf_set_lines(sidebar.header_buf, 0, -1, false, lines)
-	end)
+	else
+		lines = vim.api.nvim_buf_get_lines(sidebar.header_buf, 0, -1, false)
+	end
 	apply_highlights(sidebar.header_buf, lines, items)
 end
 
@@ -1075,7 +1131,7 @@ local function render_selector_panels()
 	local sidebar = sidebar_state()
 	local selector_width = 3
 	for _, book in ipairs(index.list_notebooks()) do
-		selector_width = math.max(selector_width, display_width("● " .. book.name))
+		selector_width = math.max(selector_width, display_width((book.icon or "●") .. " " .. book.name))
 	end
 	for _, tag in ipairs(index.list_tags()) do
 		selector_width = math.max(selector_width, display_width("■ " .. tag))
@@ -1084,8 +1140,8 @@ local function render_selector_panels()
 	if is_valid_buf(sidebar.notebook_buf) then
 		local lines, items = {}, {}
 		for _, book in ipairs(index.list_notebooks()) do
-			table.insert(lines, "● " .. book.name)
-			items[#lines] = { id = book.id, color = book.color }
+			table.insert(lines, (book.icon or "●") .. " " .. book.name)
+			items[#lines] = { id = book.id, color = book.color, icon = book.icon }
 		end
 		sidebar.notebook_items = items
 		with_modifiable(sidebar.notebook_buf, function()
@@ -1093,22 +1149,50 @@ local function render_selector_panels()
 		end)
 		vim.api.nvim_buf_clear_namespace(sidebar.notebook_buf, highlight_ns, 0, -1)
 		for line, item in ipairs(items) do
-			local group = item.id == sidebar.all_notebook and "SeijakuModeActive" or "SeijakuMuted"
+			local selected = item.id == sidebar.all_notebook
+			local group = selected and "SeijakuSelectorSelected" or "SeijakuMuted"
 			vim.api.nvim_buf_set_extmark(sidebar.notebook_buf, highlight_ns, line - 1, 0, {
-				end_col = #lines[line], hl_group = group, priority = 120,
+				end_col = #lines[line],
+				hl_group = group,
+				hl_mode = "replace",
+				priority = 120,
 			})
 			if item.color and item.color:match("^#%x%x%x%x%x%x$") then
 				local glyph_group = "SeijakuNotebookGlyph_" .. item.color:sub(2)
+
 				if not notebook_hl_cache[glyph_group] then
-					vim.api.nvim_set_hl(0, glyph_group, { fg = item.color, bg = "NONE", bold = true })
+					vim.api.nvim_set_hl(0, glyph_group, {
+						fg = item.color,
+						bg = "NONE",
+						bold = true,
+					})
 					notebook_hl_cache[glyph_group] = true
 				end
-				vim.api.nvim_buf_set_extmark(sidebar.notebook_buf, highlight_ns, line - 1, 0, {
-					end_col = #"●", hl_group = glyph_group, hl_mode = "combine", priority = 130,
-				})
+
 				if item.id == sidebar.all_notebook then
-					vim.api.nvim_buf_set_extmark(sidebar.notebook_buf, highlight_ns, line - 1, #"● ", {
-						end_col = #lines[line], hl_group = glyph_group, hl_mode = "combine", priority = 130,
+					local selected_group = "SeijakuNotebookSelected_" .. item.color:sub(2)
+
+					if not notebook_hl_cache[selected_group] then
+						vim.api.nvim_set_hl(0, selected_group, {
+							fg = "#ffffff",
+							bg = item.color,
+							bold = true,
+						})
+						notebook_hl_cache[selected_group] = true
+					end
+
+					vim.api.nvim_buf_set_extmark(sidebar.notebook_buf, highlight_ns, line - 1, 0, {
+						end_col = #lines[line],
+						hl_group = selected_group,
+						hl_mode = "replace",
+						priority = 140,
+					})
+				else
+					vim.api.nvim_buf_set_extmark(sidebar.notebook_buf, highlight_ns, line - 1, 0, {
+						end_col = #(item.icon or "●"),
+						hl_group = glyph_group,
+						hl_mode = "combine",
+						priority = 130,
 					})
 				end
 			end
@@ -1129,21 +1213,49 @@ local function render_selector_panels()
 		end)
 		vim.api.nvim_buf_clear_namespace(sidebar.tag_buf, highlight_ns, 0, -1)
 		for line, item in ipairs(items) do
+			local selected = item.tag == sidebar.all_tag
 			local tag_group = notes.tag_glyph_highlight(item.tag)
-			local group = item.tag == sidebar.all_tag and tag_group or "SeijakuMuted"
-			vim.api.nvim_buf_set_extmark(sidebar.tag_buf, highlight_ns, line - 1, 0, {
-				end_col = #lines[line], hl_group = group, priority = 120,
-			})
-			vim.api.nvim_buf_set_extmark(sidebar.tag_buf, highlight_ns, line - 1, 0, {
-				end_col = #"■", hl_group = tag_group, hl_mode = "combine", priority = 130,
-			})
-			if item.tag == sidebar.all_tag then
-				vim.api.nvim_buf_set_extmark(sidebar.tag_buf, highlight_ns, line - 1, #"■ ", {
-					end_col = #lines[line], hl_group = tag_group, hl_mode = "combine", priority = 130,
+
+			if selected then
+				local tag_hl = vim.api.nvim_get_hl(0, {
+					name = tag_group,
+					link = false,
 				})
-			end
-			if item.tag == sidebar.all_tag and is_valid_win(sidebar.tag_win) then
-				pcall(vim.api.nvim_win_set_cursor, sidebar.tag_win, { line, 0 })
+
+				local bg = tag_hl.fg
+
+				if bg then
+					local selected_group = "SeijakuTagSelected_" .. tostring(bg)
+
+					if not tag_hl_cache[selected_group] then
+						vim.api.nvim_set_hl(0, selected_group, {
+							fg = "#ffffff",
+							bg = bg,
+							bold = true,
+						})
+						tag_hl_cache[selected_group] = true
+					end
+
+					vim.api.nvim_buf_set_extmark(sidebar.tag_buf, highlight_ns, line - 1, 0, {
+						end_col = #lines[line],
+						hl_group = selected_group,
+						hl_mode = "replace",
+						priority = 140,
+					})
+				end
+			else
+				vim.api.nvim_buf_set_extmark(sidebar.tag_buf, highlight_ns, line - 1, 0, {
+					end_col = #lines[line],
+					hl_group = "SeijakuMuted",
+					priority = 120,
+				})
+
+				vim.api.nvim_buf_set_extmark(sidebar.tag_buf, highlight_ns, line - 1, 0, {
+					end_col = #"■",
+					hl_group = tag_group,
+					hl_mode = "combine",
+					priority = 130,
+				})
 			end
 		end
 	end
@@ -1404,6 +1516,8 @@ function M.open_preview(note_id, opts)
 		local position = state_mod.get().config.sidebar.position or "right"
 		vim.cmd(position == "left" and "rightbelow vsplit" or "leftabove vsplit")
 		sidebar.preview_win = vim.api.nvim_get_current_win()
+		pcall(vim.api.nvim_win_set_width, sidebar.preview_win, math.max(20, math.floor(vim.o.columns * 0.30)))
+		vim.wo[sidebar.preview_win].winfixwidth = true
 		set_preview_placeholder(sidebar, "Select a note")
 	end
 
@@ -1754,6 +1868,36 @@ function M.handle_live_grep()
 	require("seijaku.search").live_grep()
 end
 
+function M.prompt_title_filter()
+	local sidebar = sidebar_state()
+	if not is_valid_win(sidebar.header_win) or not is_valid_buf(sidebar.header_buf) then
+		return
+	end
+	sidebar.search_active = true
+	vim.api.nvim_buf_set_lines(sidebar.header_buf, 0, -1, false, { sidebar.title_filter or "" })
+	vim.api.nvim_set_current_win(sidebar.header_win)
+	vim.api.nvim_win_set_cursor(sidebar.header_win, { 1, #(sidebar.title_filter or "") })
+	vim.cmd("startinsert")
+end
+
+function M.finish_title_filter()
+	local sidebar = sidebar_state()
+	sidebar.search_active = false
+	if is_valid_win(sidebar.win) then
+		vim.api.nvim_set_current_win(sidebar.win)
+	end
+	M.refresh()
+end
+
+function M.sync_title_filter_from_header()
+	local sidebar = sidebar_state()
+	if not sidebar.search_active or not is_valid_buf(sidebar.header_buf) then
+		return
+	end
+	sidebar.title_filter = vim.trim(vim.api.nvim_buf_get_lines(sidebar.header_buf, 0, 1, false)[1] or "")
+	M.refresh()
+end
+
 function M.calendar_move_days(amount)
 	local sidebar = sidebar_state()
 	stop_calendar_day_timer()
@@ -1987,11 +2131,35 @@ function M.setup_notebook_mappings(buf)
 			M.sync_mode_preview(true)
 		end
 	end, opts)
-	vim.keymap.set("n", "<Tab>", function() M.cycle_notebook(1) end, opts)
-	vim.keymap.set("n", "<S-Tab>", function() M.cycle_notebook(-1) end, opts)
-	vim.keymap.set("n", "f", function() M.cycle_tag(1) end, opts)
-	vim.keymap.set("n", "F", function() M.cycle_tag(-1) end, opts)
+	vim.keymap.set("n", "<Tab>", function()
+		M.cycle_notebook(1)
+	end, opts)
+	vim.keymap.set("n", "<S-Tab>", function()
+		M.cycle_notebook(-1)
+	end, opts)
+	vim.keymap.set("n", "f", function()
+		M.cycle_tag(1)
+	end, opts)
+	vim.keymap.set("n", "F", function()
+		M.cycle_tag(-1)
+	end, opts)
 	vim.keymap.set("n", "C", M.toggle_mode, opts)
+end
+
+function M.setup_header_mappings(buf)
+	local opts = { buffer = buf, silent = true, nowait = true }
+	vim.keymap.set("i", "<Esc>", function()
+		vim.cmd("stopinsert")
+		M.finish_title_filter()
+	end, opts)
+	vim.keymap.set("i", "<CR>", function()
+		M.finish_title_filter()
+	end, opts)
+	vim.keymap.set("n", "<CR>", M.finish_title_filter, opts)
+	vim.api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, {
+		buffer = buf,
+		callback = M.sync_title_filter_from_header,
+	})
 end
 
 function M.setup_tag_mappings(buf)
@@ -2006,11 +2174,20 @@ function M.setup_tag_mappings(buf)
 			M.sync_mode_preview(true)
 		end
 	end, opts)
-	vim.keymap.set("n", "f", function() M.cycle_tag(1) end, opts)
-	vim.keymap.set("n", "F", function() M.cycle_tag(-1) end, opts)
-	vim.keymap.set("n", "<Tab>", function() M.cycle_notebook(1) end, opts)
-	vim.keymap.set("n", "<S-Tab>", function() M.cycle_notebook(-1) end, opts)
+	vim.keymap.set("n", "f", function()
+		M.cycle_tag(1)
+	end, opts)
+	vim.keymap.set("n", "F", function()
+		M.cycle_tag(-1)
+	end, opts)
+	vim.keymap.set("n", "<Tab>", function()
+		M.cycle_notebook(1)
+	end, opts)
+	vim.keymap.set("n", "<S-Tab>", function()
+		M.cycle_notebook(-1)
+	end, opts)
 	vim.keymap.set("n", "C", M.toggle_mode, opts)
+	vim.keymap.set("n", "/", M.prompt_title_filter, opts)
 end
 
 function M.setup_calendar_notes_mappings(buf)
@@ -2019,6 +2196,9 @@ function M.setup_calendar_notes_mappings(buf)
 		silent = true,
 		nowait = true,
 	}
+	for _, lhs in ipairs({ "i", "I", "A", "O", "c", "S" }) do
+		vim.keymap.set({ "n", "x" }, lhs, "<Nop>", opts)
+	end
 
 	vim.keymap.set("n", "<CR>", M.handle_calendar_note_enter, opts)
 	vim.keymap.set("n", "a", M.handle_create_for_context, opts)
@@ -2030,10 +2210,17 @@ function M.setup_calendar_notes_mappings(buf)
 	vim.keymap.set("n", "o", M.handle_open_target, opts)
 	vim.keymap.set("n", "dd", M.handle_calendar_delete, opts)
 	vim.keymap.set("n", "<Tab>", M.toggle_all_notebook, opts)
-	vim.keymap.set("n", "<S-Tab>", function() M.cycle_notebook(-1) end, opts)
-	vim.keymap.set("n", "f", function() M.cycle_tag(1) end, opts)
-	vim.keymap.set("n", "F", function() M.cycle_tag(-1) end, opts)
+	vim.keymap.set("n", "<S-Tab>", function()
+		M.cycle_notebook(-1)
+	end, opts)
+	vim.keymap.set("n", "f", function()
+		M.cycle_tag(1)
+	end, opts)
+	vim.keymap.set("n", "F", function()
+		M.cycle_tag(-1)
+	end, opts)
 	vim.keymap.set("n", "C", M.toggle_mode, opts)
+	vim.keymap.set("n", "/", M.prompt_title_filter, opts)
 	vim.keymap.set("n", "R", M.refresh, opts)
 	vim.keymap.set("n", "j", function()
 		move_list_selection(sidebar_state().calendar_notes_win, sidebar_state().calendar_notes_items, 1)
@@ -2071,19 +2258,29 @@ function M.setup_mappings(buf)
 	vim.keymap.set("n", "r", M.handle_rename, opts)
 	vim.keymap.set("n", "dd", M.handle_delete, opts)
 	vim.keymap.set("n", "<Tab>", M.toggle_all_notebook, opts)
-	vim.keymap.set("n", "<S-Tab>", function() M.cycle_notebook(-1) end, opts)
+	vim.keymap.set("n", "<S-Tab>", function()
+		M.cycle_notebook(-1)
+	end, opts)
 	vim.keymap.set("n", "C", M.toggle_mode, opts)
 	vim.keymap.set("n", "s", M.toggle_all_sort, opts)
-	vim.keymap.set("n", "f", function() M.cycle_tag(1) end, opts)
-	vim.keymap.set("n", "F", function() M.cycle_tag(-1) end, opts)
+	vim.keymap.set("n", "f", function()
+		M.cycle_tag(1)
+	end, opts)
+	vim.keymap.set("n", "F", function()
+		M.cycle_tag(-1)
+	end, opts)
 	vim.keymap.set("n", "b", function()
 		require("seijaku.notes").manage_notebooks()
 	end, opts)
 	vim.keymap.set("n", "#", M.handle_tags, opts)
 	vim.keymap.set("n", "p", M.handle_pin, opts)
 	vim.keymap.set("n", "o", M.handle_open_target, opts)
-	vim.keymap.set("n", "/", M.handle_live_grep, opts)
+	vim.keymap.set("n", "/", M.prompt_title_filter, opts)
+	vim.keymap.set("n", "g/", M.handle_live_grep, opts)
 	vim.keymap.set("n", "R", M.refresh, opts)
+	for _, lhs in ipairs({ "i", "I", "A", "O", "c", "S" }) do
+		vim.keymap.set({ "n", "x" }, lhs, "<Nop>", opts)
+	end
 	vim.keymap.set("n", "h", function()
 		calendar_or_normal(function()
 			M.calendar_move_days(-1)

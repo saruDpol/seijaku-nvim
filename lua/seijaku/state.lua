@@ -38,6 +38,8 @@ local state = {
     all_sort = "updated",
     all_tag = "all",
     all_notebook = "all",
+    title_filter = "",
+    search_active = false,
     lines = {},
     line_items = {},
     notebook_items = {},
@@ -74,6 +76,8 @@ function M.setup(config)
   state.sidebar.all_sort = config.sidebar.default_all_sort or "updated"
   state.sidebar.all_tag = "all"
   state.sidebar.all_notebook = "all"
+  state.sidebar.title_filter = ""
+  state.sidebar.search_active = false
   state.sidebar.lines = {}
   state.sidebar.line_items = {}
   state.sidebar.notebook_items = {}

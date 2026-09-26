@@ -30,6 +30,20 @@ local function valid_color(color)
   return type(color) == "string" and color:match("^#%x%x%x%x%x%x$") ~= nil
 end
 
+local function notebook_icon(value)
+  if value == nil or value == false or value == "" then
+    return nil
+  end
+  if type(value) ~= "string" then
+    return nil
+  end
+  local icon = vim.trim(value)
+  if icon == "" or icon:find("%c") or vim.fn.strchars(icon) > 4 then
+    return nil
+  end
+  return icon
+end
+
 local function assign_tag_color(index, tag)
   index.tag_colors = index.tag_colors or {}
   if valid_color(index.tag_colors[tag]) then
@@ -795,6 +809,9 @@ function M.create_notebook(opts)
   if opts.path ~= nil and type(opts.path) ~= "string" then
     return nil, "notebook path must be a string"
   end
+  if opts.icon ~= nil and not notebook_icon(opts.icon) then
+    return nil, "notebook icon must contain one to four printable characters"
+  end
   local path = opts.path and paths.normalize(opts.path) or nil
   if opts.path and not path then
     return nil, "invalid notebook path"
@@ -809,6 +826,7 @@ function M.create_notebook(opts)
     name = name,
     path = path,
     color = opts.color or notebook_palette[(tonumber(id:sub(-2), 16) % #notebook_palette) + 1],
+    icon = notebook_icon(opts.icon),
     created_at = now,
     updated_at = now,
   }
@@ -827,7 +845,7 @@ function M.update_notebook(notebook_id, changes)
     return false, "notebook not found"
   end
   changes = changes or {}
-  local name, path, color = notebook.name, notebook.path, notebook.color
+  local name, path, color, icon = notebook.name, notebook.path, notebook.color, notebook.icon
   if changes.name ~= nil then
     name = notebook_name(changes.name)
     if not name then
@@ -856,9 +874,16 @@ function M.update_notebook(notebook_id, changes)
     end
     color = changes.color
   end
+  if changes.icon ~= nil then
+    icon = notebook_icon(changes.icon)
+    if changes.icon ~= false and changes.icon ~= "" and not icon then
+      return false, "notebook icon must contain one to four printable characters"
+    end
+  end
   notebook.name = name
   notebook.path = path
   notebook.color = color
+  notebook.icon = icon
   notebook.updated_at = util.now()
   queue_notebook_upsert(notebook)
   return structural_save()

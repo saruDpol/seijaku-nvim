@@ -15,6 +15,8 @@ local tag_highlights = {}
 local tag_glyph_highlights = {}
 local tag_highlight_colors = {}
 local notebook_highlights = {}
+local metadata_expanded = setmetatable({}, { __mode = "k" })
+local metadata_guarded_buffers = {}
 
 local function refresh_sidebar()
   local ok, sidebar = pcall(require, "seijaku.sidebar")
@@ -393,15 +395,10 @@ end
 function M.metadata_foldtext()
   local note = index.get_note_for_file(vim.api.nvim_buf_get_name(0))
   local lines = vim.api.nvim_buf_get_lines(0, vim.v.foldstart - 1, vim.v.foldend, false)
-  local target = nil
   local notebook_id = nil
   local tags = nil
   local pinned = nil
   for _, line in ipairs(lines) do
-    local target_value = line:match("^> Target:%s*`([^`]+)`")
-    if target_value then
-      target = target_value
-    end
     local notebook_value = line:match("^> Notebook:%s*`([^`]+)`")
     if notebook_value then
       notebook_id = notebook_value
@@ -419,31 +416,40 @@ function M.metadata_foldtext()
     end
   end
 
-  local label = target and target ~= "global" and paths.basename(target) or note and note.title
-    or vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t:r")
   notebook_id = notebook_id or (note and note.notebook_id)
   local notebook = notebook_id and index.get_notebook(notebook_id) or nil
   tags = tags or note and note.tags or {}
   if pinned == nil then
     pinned = note and note.pinned == true or false
   end
-  local chunks = { { " " .. tostring(label) .. " ", "SeijakuMetadataFile" } }
+  local chunks = {}
+  local function add_block(text, group)
+    if #chunks > 0 then
+      table.insert(chunks, { " ", "Normal" })
+    end
+    table.insert(chunks, { tostring(text), group })
+  end
+
   if pinned then
-    table.insert(chunks, { " pinned ", "SeijakuPinnedBlock" })
+    add_block("📌", "SeijakuPinned")
   end
   if notebook_id then
     local book_name = notebook and notebook.name or notebook_id
     local color = notebook and notebook.color
     local group = "SeijakuTag"
     if type(color) == "string" and color:match("^#%x%x%x%x%x%x$") then
-      group = notebook_highlights[color] or ("SeijakuNotebookChip_" .. color:sub(2))
-      vim.api.nvim_set_hl(0, group, { fg = "#faf8f2", bg = color, bold = true })
+      group = notebook_highlights[color] or ("SeijakuNotebookFold_" .. color:sub(2))
+      vim.api.nvim_set_hl(0, group, { fg = color, bg = "NONE", bold = true })
       notebook_highlights[color] = group
     end
-    table.insert(chunks, { " " .. book_name .. " ", group })
+    add_block((notebook and notebook.icon or "●") .. " " .. book_name, group)
   end
   for _, tag in ipairs(tags or {}) do
-    table.insert(chunks, { " " .. tag .. " ", tag_highlights[tag] or "SeijakuTag" })
+    ensure_tag_highlight(tag)
+    add_block("■ " .. tag, tag_glyph_highlights[tag] or "SeijakuTag")
+  end
+  if #chunks == 0 then
+    return { { "", "SeijakuMetadataFold" } }
   end
   return chunks
 end
@@ -469,6 +475,34 @@ function M.apply_metadata_fold(win, opts)
   end
 
   opts = opts or {}
+
+  local function close_metadata_in_window(target_win)
+    if not target_win or not vim.api.nvim_win_is_valid(target_win) or metadata_expanded[target_win] then
+      return
+    end
+    vim.api.nvim_win_call(target_win, function()
+      local fold_first = metadata_range(vim.api.nvim_win_get_buf(target_win))
+      if fold_first and vim.fn.foldclosed(fold_first) == -1 then
+        vim.cmd(string.format("silent! %dfoldclose", fold_first))
+      end
+    end)
+  end
+
+  if not metadata_guarded_buffers[buf] then
+    metadata_guarded_buffers[buf] = true
+    vim.keymap.set("n", "zo", function()
+      M.toggle_metadata(vim.api.nvim_get_current_win())
+    end, { buffer = buf, silent = true })
+    vim.api.nvim_create_autocmd({ "CursorMoved", "InsertEnter", "TextChanged" }, {
+      buffer = buf,
+      callback = function()
+        for _, target_win in ipairs(vim.fn.win_findbuf(buf)) do
+          close_metadata_in_window(target_win)
+        end
+      end,
+    })
+  end
+
   vim.api.nvim_win_call(win, function()
     vim.wo.foldmethod = "manual"
     vim.wo.foldenable = true
@@ -485,6 +519,7 @@ function M.apply_metadata_fold(win, opts)
 
     if opts.reset == false and not opts.replace and vim.fn.foldlevel(first) > 0 then
       if opts.close ~= false then
+		metadata_expanded[win] = nil
         vim.cmd(string.format("silent! %dfoldclose", first))
         local cursor = vim.api.nvim_win_get_cursor(0)
         if cursor[1] >= first and cursor[1] <= last then
@@ -509,6 +544,7 @@ function M.apply_metadata_fold(win, opts)
     end
     vim.cmd(string.format("silent! %d,%dfold", first, last))
     if opts.close ~= false then
+		metadata_expanded[win] = nil
       vim.cmd(string.format("silent! %dfoldclose", first))
       local cursor = vim.api.nvim_win_get_cursor(0)
       if cursor[1] >= first and cursor[1] <= last then
@@ -535,10 +571,12 @@ function M.toggle_metadata(win)
   end
   vim.api.nvim_win_call(win, function()
     if vim.fn.foldclosed(first) == -1 then
+		metadata_expanded[win] = nil
       vim.cmd(string.format("silent! %d,%dfold", first, last))
       vim.cmd(string.format("silent! %dfoldclose", first))
     else
       vim.cmd(string.format("silent! %dfoldopen", first))
+		metadata_expanded[win] = true
     end
   end)
   return true
@@ -817,7 +855,7 @@ function M.manage_notebooks()
     table.insert(choices, {
       value = notebook.id,
       label = notebook.name .. (notebook.path and ("  " .. notebook.path) or ""),
-      icon = "◆",
+      icon = notebook.icon or "●",
       color = notebook.color,
     })
   end
@@ -836,12 +874,21 @@ function M.manage_notebooks()
           if path == nil then
             return
           end
-          local notebook, err = index.create_notebook({ name = name, path = path ~= "" and path or nil })
-          if not notebook then
-            util.notify("notebook: " .. tostring(err), vim.log.levels.ERROR)
-            return
-          end
-          refresh_sidebar()
+          picker.input({ title = " notebook icon · optional ", allow_empty = true }, function(icon)
+            if icon == nil then
+              return
+            end
+            local notebook, err = index.create_notebook({
+              name = name,
+              path = path ~= "" and path or nil,
+              icon = icon ~= "" and icon or nil,
+            })
+            if not notebook then
+              util.notify("notebook: " .. tostring(err), vim.log.levels.ERROR)
+              return
+            end
+            refresh_sidebar()
+          end)
         end)
       end)
       return
@@ -886,15 +933,25 @@ function M.manage_notebooks()
             if path == nil then
               return
             end
-            local ok, err = index.update_notebook(notebook.id, {
-              name = name,
-              path = path ~= "" and path or false,
-            })
-            if not ok then
-              util.notify("notebook: " .. tostring(err), vim.log.levels.ERROR)
-              return
-            end
-            refresh_sidebar()
+            picker.input({
+              title = " notebook icon · optional ",
+              default = notebook.icon or "",
+              allow_empty = true,
+            }, function(icon)
+              if icon == nil then
+                return
+              end
+              local ok, err = index.update_notebook(notebook.id, {
+                name = name,
+                path = path ~= "" and path or false,
+                icon = icon ~= "" and icon or false,
+              })
+              if not ok then
+                util.notify("notebook: " .. tostring(err), vim.log.levels.ERROR)
+                return
+              end
+              refresh_sidebar()
+            end)
           end)
         end)
       elseif action.value == "delete" then

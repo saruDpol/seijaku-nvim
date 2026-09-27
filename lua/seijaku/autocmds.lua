@@ -21,6 +21,15 @@ function M.setup()
     end,
   })
 
+  vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
+    group = group,
+    callback = function()
+      if require("seijaku.state").get().sidebar.open then
+        sidebar.schedule_layout_rebalance()
+      end
+    end,
+  })
+
   vim.api.nvim_create_autocmd({ "BufEnter", "DirChanged" }, {
     group = group,
     callback = function(args)
@@ -122,7 +131,7 @@ function M.setup()
       local index = require("seijaku.index")
 
       if index.touch_note_for_file(file_path) then
-        require("seijaku.notes").sync_metadata(index.get_note_for_file(file_path), args.buf, {
+        require("seijaku.notes").clean_legacy_metadata(index.get_note_for_file(file_path), args.buf, {
           write = false,
         })
         local state = require("seijaku.state").get()

@@ -9,6 +9,10 @@ function M.setup()
     require("seijaku").open_sidebar()
   end, {})
 
+  vim.api.nvim_create_user_command("SeijakuFull", function()
+    require("seijaku").full_layout()
+  end, {})
+
   vim.api.nvim_create_user_command("SeijakuCloseSidebar", function()
     require("seijaku").close_sidebar()
   end, {})
@@ -148,11 +152,6 @@ function M.setup()
     require("seijaku").live_grep()
   end, {})
 
-  vim.api.nvim_create_user_command("SeijakuToggleMetadata", function()
-    if not require("seijaku.notes").toggle_metadata() then
-      vim.notify("seijaku: current buffer has no note metadata", vim.log.levels.INFO)
-    end
-  end, {})
 end
 
 return M

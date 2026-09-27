@@ -79,14 +79,6 @@ local function stop_reload_timer()
   end
 end
 
-local function sync_note_metadata(note)
-  local ok, notes = pcall(require, "seijaku.notes")
-
-  if ok and type(notes.sync_metadata) == "function" then
-    notes.sync_metadata(note)
-  end
-end
-
 local function empty_index()
   return {
     version = schema_version,
@@ -252,75 +244,13 @@ local function read_note_lines(abs_path)
   return vim.fn.readfile(abs_path)
 end
 
-local function parse_note_metadata(lines)
-  local metadata = {
-    targets = {},
-    tags = {},
-  }
-  local in_block = false
-
-  for _, line in ipairs(lines or {}) do
-    if line == "<!-- seijaku:metadata:start -->" then
-      in_block = true
-    elseif line == "<!-- seijaku:metadata:end -->" then
-      break
-    elseif in_block then
-      local created_at = line:match("^> Created:%s*`([^`]+)`")
-      if created_at then
-        metadata.created_at = created_at
-      end
-
-      local updated_at = line:match("^> Updated:%s*`([^`]+)`")
-      if updated_at then
-        metadata.updated_at = updated_at
-      end
-
-      local target_path = line:match("^> Target:%s*`([^`]+)`")
-      if target_path and target_path ~= "global" then
-        table.insert(metadata.targets, {
-          path = target_path,
-          type = paths.target_type(target_path),
-        })
-      end
-
-      local calendar_date = line:match("^> Date:%s*`([^`]+)`")
-      if calendar_date then
-        metadata.calendar_date = calendar_date
-      end
-
-      local notebook_id = line:match("^> Notebook:%s*`([^`]+)`")
-      if notebook_id then
-        metadata.notebook_id = notebook_id
-      end
-
-      local template_id = line:match("^> Template:%s*`([^`]+)`")
-      if template_id then
-        metadata.template_id = template_id
-      end
-
-      local tags = line:match("^> Tags:%s*(.+)$")
-      if tags then
-        for tag in tags:gmatch("`([^`]+)`") do
-          table.insert(metadata.tags, tag)
-        end
-      end
-
-      local pinned = line:match("^> Pinned:%s*`([^`]+)`")
-      if pinned then
-        metadata.pinned = pinned == "true"
-      end
-    end
-  end
-
+local function parse_note_title(lines)
   for _, line in ipairs(lines or {}) do
     local title = line:match("^#%s+(.+)$")
     if title and title ~= "" then
-      metadata.title = title
-      break
+      return title
     end
   end
-
-  return metadata
 end
 
 local function note_from_file(state, rel_path)
@@ -331,21 +261,17 @@ local function note_from_file(state, rel_path)
     return nil
   end
 
-  local metadata = parse_note_metadata(lines)
   local basename = vim.fn.fnamemodify(rel_path, ":t:r")
 
   return {
     id = basename,
-    title = metadata.title or basename,
+    title = parse_note_title(lines) or basename,
     file = rel_path,
-    created_at = metadata.created_at or util.now(),
-    updated_at = metadata.updated_at or metadata.created_at or util.now(),
-    calendar_date = metadata.calendar_date,
-    notebook_id = metadata.notebook_id,
-    template_id = metadata.template_id,
-    targets = metadata.targets or {},
-    tags = metadata.tags or {},
-    pinned = metadata.pinned == true,
+    created_at = util.now(),
+    updated_at = util.now(),
+    targets = {},
+    tags = {},
+    pinned = false,
   }
 end
 
@@ -560,19 +486,13 @@ function M.save_sync(opts)
     latest.version = schema_version
   end
 
-  local detached_note_ids
-  state.index, detached_note_ids = apply_pending(latest)
+  state.index = apply_pending(latest)
   M.rebuild_derived_indexes()
   local ok, write_err = write_index_sync()
   if ok then
     clear_pending()
   end
   release_index_lock(lock_path)
-  if ok then
-    for _, note_id in ipairs(detached_note_ids) do
-      sync_note_metadata(state.notes_by_id[note_id])
-    end
-  end
   return ok, write_err
 end
 
@@ -914,7 +834,6 @@ function M.assign_notebook(note_id, notebook_id)
   if not saved then
     return false, err
   end
-  sync_note_metadata(note)
   return true
 end
 
@@ -1136,8 +1055,6 @@ function M.set_calendar_date(note_id, date)
   end
   queue_upsert(note)
   structural_save()
-  sync_note_metadata(note)
-
   return true
 end
 
@@ -1160,6 +1077,62 @@ function M.get_tag_color(tag)
   local colors = state_mod.get().index and state_mod.get().index.tag_colors or {}
   local color = colors and colors[tag]
   return valid_color(color) and color or nil
+end
+
+function M.set_tag_color(tag, color)
+  tag = vim.trim(tostring(tag or "")):lower()
+  if tag == "" then
+    return false, "tag is required"
+  end
+  if not valid_color(color) then
+    return false, "tag color must be a #RRGGBB value"
+  end
+  local current_index = state_mod.get().index
+  current_index.tag_colors = current_index.tag_colors or {}
+  current_index.tag_colors[tag] = color
+  pending_tag_colors[tag] = color
+  return structural_save()
+end
+
+function M.rename_tag(old_tag, new_tag)
+  old_tag = vim.trim(tostring(old_tag or "")):lower()
+  new_tag = vim.trim(tostring(new_tag or "")):lower()
+  if old_tag == "" or new_tag == "" then
+    return false, "tag name is required"
+  end
+  if new_tag:find("[`,%c]") then
+    return false, "tags cannot contain commas, backticks or control characters"
+  end
+  if old_tag == new_tag then
+    return true
+  end
+  local state = state_mod.get()
+  for _, note in pairs(state.notes_by_id) do
+    local changed = false
+    local tags, seen = {}, {}
+    for _, tag in ipairs(note.tags or {}) do
+      local renamed = tag == old_tag
+      tag = renamed and new_tag or tag
+      if not seen[tag] then
+        seen[tag] = true
+        table.insert(tags, tag)
+      end
+      changed = changed or renamed
+    end
+    if changed then
+      table.sort(tags)
+      note.tags = tags
+      note.updated_at = util.now()
+      queue_upsert(note)
+    end
+  end
+  local colors = state.index.tag_colors or {}
+  if colors[old_tag] and not colors[new_tag] then
+    colors[new_tag] = colors[old_tag]
+    pending_tag_colors[new_tag] = colors[new_tag]
+  end
+  colors[old_tag] = nil
+  return structural_save()
 end
 
 function M.set_tags(note_id, tags)
@@ -1188,7 +1161,6 @@ function M.set_tags(note_id, tags)
   end
   note.updated_at = util.now()
   M.mark_dirty_sync(note)
-  sync_note_metadata(note)
   return true
 end
 
@@ -1200,7 +1172,6 @@ function M.toggle_pin(note_id)
   note.pinned = not (note.pinned == true)
   note.updated_at = util.now()
   M.mark_dirty_sync(note)
-  sync_note_metadata(note)
   return true, note.pinned
 end
 
@@ -1258,8 +1229,6 @@ function M.attach(note_id, target_path, target_type, opts)
     queue_upsert(note)
     structural_save()
   end
-  sync_note_metadata(note)
-
   return true
 end
 
@@ -1310,8 +1279,6 @@ function M.detach(note_id, target_path, opts)
     queue_upsert(note)
     structural_save()
   end
-  sync_note_metadata(note)
-
   return true
 end
 

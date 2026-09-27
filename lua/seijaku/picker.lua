@@ -2,6 +2,8 @@ local M = {}
 
 local active = nil
 local color_ns = vim.api.nvim_create_namespace("seijaku_picker_colors")
+local default_notebook_icon = "■"
+local tag_icon = ""
 
 local function display_width(value)
   return vim.fn.strdisplaywidth(value or "")
@@ -208,6 +210,93 @@ function M.input(opts, callback)
   return picker.win, picker.buf
 end
 
+-- A temporary filesystem navigator used by the note form's path field.  It
+-- deliberately does not replace the active picker, so closing it returns to
+-- the exact composer state the user left behind.
+function M.browse_path(initial, callback)
+  local origin = vim.api.nvim_get_current_win()
+  local directory = vim.fn.fnamemodify(initial ~= "" and initial or vim.loop.cwd(), ":p")
+  if vim.fn.isdirectory(directory) == 0 then
+    directory = vim.fn.fnamemodify(directory, ":h")
+  end
+  directory = directory:gsub("/$", "")
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].buftype, vim.bo[buf].bufhidden, vim.bo[buf].swapfile = "nofile", "wipe", false
+  local width = math.min(70, math.max(38, vim.o.columns - 4))
+  local win = vim.api.nvim_open_win(buf, true, popup_config(width, 3, " choose path "))
+  vim.wo[win].cursorline = true
+  vim.wo[win].winhighlight =
+    "Normal:SeijakuPickerNormal,FloatBorder:SeijakuBrand,FloatTitle:SeijakuBrand,CursorLine:SeijakuPickerCursor"
+  local entries = {}
+
+  local function finish(value)
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
+    end
+    if vim.api.nvim_win_is_valid(origin) then
+      vim.api.nvim_set_current_win(origin)
+    end
+    callback(value)
+  end
+
+  local function render()
+    local names = vim.fn.readdir(directory)
+    table.sort(names, function(a, b)
+      local a_dir = vim.fn.isdirectory(directory .. "/" .. a) == 1
+      local b_dir = vim.fn.isdirectory(directory .. "/" .. b) == 1
+      if a_dir ~= b_dir then
+        return a_dir
+      end
+      return a < b
+    end)
+    entries = {
+      { label = ".", path = directory, directory = true },
+      { label = "..", path = vim.fn.fnamemodify(directory, ":h"), directory = true },
+    }
+    for _, name in ipairs(names) do
+      local path = directory .. "/" .. name
+      table.insert(entries, { label = name, path = path, directory = vim.fn.isdirectory(path) == 1 })
+    end
+    local lines = {}
+    for line, entry in ipairs(entries) do
+      lines[line] = "  " .. entry.label
+    end
+    vim.bo[buf].modifiable = true
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.bo[buf].modifiable = false
+    vim.api.nvim_win_set_config(win, popup_config(
+      width,
+      math.min(#lines, math.max(3, vim.o.lines - 6)),
+      " path · enter select · l enter · h up · esc cancel "
+    ))
+    vim.api.nvim_win_set_cursor(win, { 1, 0 })
+  end
+
+  local function select_current()
+    local entry = entries[vim.api.nvim_win_get_cursor(win)[1]]
+    if not entry then return end
+    finish(entry.path)
+  end
+
+  local function enter_directory()
+    local entry = entries[vim.api.nvim_win_get_cursor(win)[1]]
+    if not entry or not entry.directory then return end
+    directory = vim.fn.fnamemodify(entry.path, ":p"):gsub("/$", "")
+    render()
+  end
+  local map_opts = { buffer = buf, silent = true, nowait = true }
+  vim.keymap.set("n", "<CR>", select_current, map_opts)
+  vim.keymap.set("n", "l", enter_directory, map_opts)
+  vim.keymap.set("n", "h", function()
+    directory = vim.fn.fnamemodify(directory, ":h")
+    render()
+  end, map_opts)
+  vim.keymap.set("n", "<Esc>", function() finish(nil) end, map_opts)
+  vim.keymap.set("n", "q", function() finish(nil) end, map_opts)
+  render()
+  return win, buf
+end
+
 -- A single-window note composer. Sub-views (single choice, tags and text
 -- input) reuse the same floating buffer rather than opening a chain of
 -- independent prompts.
@@ -266,6 +355,24 @@ function M.note_form(opts, callback)
     return id or "blank"
   end
 
+  local function select_notebook_template(notebook)
+    if not notebook then
+      return
+    end
+    local name = tostring(notebook.name or ""):lower():gsub("s$", "")
+    if name == "" then
+      return
+    end
+    for _, template in ipairs(opts.templates or {}) do
+      local value = tostring(template.value or ""):lower():gsub("s$", "")
+      local label = tostring(template.label or ""):lower():gsub("s$", "")
+      if name == value or name == label then
+        values.template_id = template.value
+        return
+      end
+    end
+  end
+
   local function set_lines(lines, title, cursor)
     if form.closed or not vim.api.nvim_win_is_valid(win) then
       return
@@ -281,6 +388,7 @@ function M.note_form(opts, callback)
   end
 
   local render_form
+  local cycle_notebook
 
   local function clear_mode_maps()
     local keys = { "j", "k", "<Down>", "<Up>", "<CR>", "<Esc>", "<C-c>", "q", "a" }
@@ -306,6 +414,16 @@ function M.note_form(opts, callback)
     vim.keymap.set("n", "<Esc>", function() form_close(true) end, map_opts)
     vim.keymap.set("n", "q", function() form_close(true) end, map_opts)
     vim.keymap.set("n", "<C-c>", function() form_close(true) end, map_opts)
+	vim.keymap.set("n", "h", function()
+		if vim.api.nvim_win_get_cursor(win)[1] == 3 then
+			cycle_notebook(-1)
+		end
+	end, map_opts)
+	vim.keymap.set("n", "l", function()
+		if vim.api.nvim_win_get_cursor(win)[1] == 3 then
+			cycle_notebook(1)
+		end
+	end, map_opts)
   end
 
   local function show_input(title, value, allow_empty, done)
@@ -406,7 +524,7 @@ function M.note_form(opts, callback)
         lines = { "  no tags · a add" }
       else
         for line, tag in ipairs(tags) do
-          lines[line] = string.format("  %s %s", selected[tag] and "■" or " ", tag)
+          lines[line] = string.format("  %s %s", selected[tag] and tag_icon or " ", tag)
         end
       end
       set_lines(lines, " tags · enter toggle · a add ", { 1, 0 })
@@ -465,6 +583,24 @@ function M.note_form(opts, callback)
     render()
   end
 
+  cycle_notebook = function(direction)
+	local choices = { false }
+	for _, notebook in ipairs(opts.notebooks or {}) do
+		table.insert(choices, notebook.id)
+	end
+	local current = 1
+	for line, value in ipairs(choices) do
+		if value == (values.notebook_id or false) then
+			current = line
+			break
+		end
+	end
+	values.notebook_id = choices[((current - 1 + direction) % #choices) + 1] or nil
+	select_notebook_template(notebook_by_id(values.notebook_id))
+	render_form()
+	pcall(vim.api.nvim_win_set_cursor, win, { 3, 0 })
+  end
+
   render_form = function()
     if form.closed then
       return
@@ -475,7 +611,7 @@ function M.note_form(opts, callback)
     set_lines({
       "  title       " .. (values.title ~= "" and values.title or "—"),
       "  template    " .. template_label(values.template_id),
-      "  notebook    " .. (notebook and notebook.name or "—"),
+      "  notebook    " .. (notebook and ((notebook.icon or default_notebook_icon) .. " " .. notebook.name) or "—"),
       "  directory   " .. (values.target_path ~= "" and values.target_path or "—"),
       "  tags        " .. tags,
       "  create note",
@@ -498,31 +634,47 @@ function M.note_form(opts, callback)
       elseif line == 3 then
         local choices = { { value = false, label = "No notebook", icon = "·" } }
         for _, notebook_item in ipairs(opts.notebooks or {}) do
-          table.insert(choices, { value = notebook_item.id, label = notebook_item.name, icon = "◆", color = notebook_item.color })
+          table.insert(choices, { value = notebook_item.id, label = notebook_item.name, icon = notebook_item.icon or default_notebook_icon, color = notebook_item.color })
         end
         table.insert(choices, { value = "new", label = "New notebook", icon = "+" })
         show_choices("notebook", choices, values.notebook_id or false, function(entry)
           if entry.value ~= "new" then
             values.notebook_id = entry.value or nil
+			select_notebook_template(notebook_by_id(values.notebook_id))
             render_form()
             return
           end
-          show_input(" notebook name ", "", false, function(name)
-            show_input(" notebook directory · optional ", "", true, function(path)
-              local notebook_item, err = opts.create_notebook(name, path ~= "" and path or nil)
-              if not notebook_item then
-                vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
-              else
-                table.insert(opts.notebooks, notebook_item)
-                values.notebook_id = notebook_item.id
-              end
-              render_form()
-            end)
-          end)
+			show_input(" notebook name ", "", false, function(name)
+				M.browse_path("", function(path)
+					if path == nil then
+						path = ""
+					end
+					show_input(" notebook icon · optional ", default_notebook_icon, true, function(icon)
+						show_input(" notebook color · #RRGGBB · optional ", "", true, function(color)
+							local notebook_item, err = opts.create_notebook(
+								name,
+								path ~= "" and path or nil,
+								icon ~= "" and icon or nil,
+								color ~= "" and color or nil
+							)
+							if not notebook_item then
+								vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
+							else
+								table.insert(opts.notebooks, notebook_item)
+								values.notebook_id = notebook_item.id
+								select_notebook_template(notebook_item)
+							end
+							render_form()
+						end)
+					end)
+				end)
+			end)
         end)
       elseif line == 4 then
-        show_input(" directory or file · optional ", values.target_path, true, function(value)
-          values.target_path = value
+        M.browse_path(values.target_path, function(path)
+          if path then
+            values.target_path = path
+          end
           render_form()
         end)
       elseif line == 5 then

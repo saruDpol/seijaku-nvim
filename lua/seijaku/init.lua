@@ -80,6 +80,10 @@ function M.open_sidebar()
   return sidebar.open()
 end
 
+function M.full_layout()
+  return sidebar.full_layout()
+end
+
 function M.close_sidebar()
   return sidebar.close()
 end

@@ -35,7 +35,6 @@ return {
         wrap = true,
         linebreak = true,
         breakindent = true,
-        fold_metadata = true,
       },
     },
   },
@@ -60,11 +59,14 @@ return {
 
 `n` opens one native composer. Move through title, template, notebook,
 associated directory or file, and tags with `j`/`k`; `Enter` edits the active
-field. The composer stays in the same floating window while a field is being
-edited or selected. Templates and notebooks are single-choice; tags are
-multi-select. Notes start with generated metadata, followed by the title and
-template body. The metadata stays folded when `editor.fold_metadata` is
-enabled.
+field. The composer keeps a single floating context and opens focused selector
+buffers for tags and notebooks: tags are multi-select and can be created in
+their selector; notebooks can be created in theirs with an optional Nerd Font
+icon. Choosing a notebook whose name matches a template automatically chooses
+that template. The path field opens a small filesystem browser and returns its
+selection to the composer. Notes are plain Markdown: their title and template body are the
+only content Seijaku generates. Attributes stay in the index and appear in an
+immutable context strip above the preview.
 
 Templates live in `opts.notes.templates`; a template is a list of lines, a
 string, or a function. Available values are `{title}`, `{template}`,
@@ -90,8 +92,8 @@ The `all` view uses compact cards:
 
 - The title uses your normal editor foreground and wraps as necessary.
 - A literal pin is shown only for pinned notes.
-- A coloured project circle prefixes the title; the creation date is followed
-  by compact, high-contrast tag squares. Linked targets use their own line
+- A coloured notebook square prefixes the title; the creation date is followed
+  by compact, coloured tag glyphs. Linked targets use their own line
   only when present.
 - Project and tag names stay in the selector column, so cards do not repeat
   metadata unnecessarily. Tag colours are stored in the index and can be
@@ -99,10 +101,12 @@ The `all` view uses compact cards:
 
 The note list has a fixed header above it, so scrolling cards never hides the
 current controls. The Markdown preview remains an independent window beside
-the sidebar. Its selector column on the right grows only as far as the longest
-project or tag name, and lists projects above tags.
+the sidebar, with an immutable context strip for its pin, notebook and tags.
+Its selector column on the right grows only as far as the longest project or
+tag name, and lists projects above tags.
 `Tab` / `Shift-Tab` cycle `all` and notebooks forward/backward; `f` /
-`F` cycle tags forward/backward. `C` opens or closes the calendar for the
+`F` cycle tags forward/backward. Moving inside either selector applies the
+notebook or tag under the cursor immediately. `C` opens or closes the calendar for the
 active filters; its month markers and day list respect both project and tag.
 The calendar always renders six weeks, so changing month does not resize it.
 Numeric input jumps to a day.

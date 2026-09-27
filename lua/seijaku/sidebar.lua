@@ -7,9 +7,11 @@ local context = require("seijaku.context")
 local paths = require("seijaku.paths")
 local calendar = require("seijaku.calendar")
 local layout = require("seijaku.layout")
+local picker = require("seijaku.picker")
 
 local refresh_timer = nil
 local calendar_day_timer = nil
+local layout_rebalance_timer = nil
 local stop_calendar_day_timer
 local apply_calendar_day_input
 local append_note_card
@@ -18,6 +20,8 @@ local selection_ns = vim.api.nvim_create_namespace("seijaku_sidebar_selection")
 local highlights_defined = false
 local notebook_hl_cache = {}
 local tag_hl_cache = {}
+local default_notebook_icon = "■"
+local tag_icon = ""
 
 local palettes = {
 	muted = {
@@ -64,6 +68,27 @@ local is_valid_win = layout.is_valid_win
 
 local function is_valid_buf(buf)
 	return buf and vim.api.nvim_buf_is_valid(buf)
+end
+
+local function sidebar_tabpage(sidebar)
+	if not is_valid_win(sidebar.win) then
+		return nil
+	end
+	return vim.api.nvim_win_get_tabpage(sidebar.win)
+end
+
+local function focus_sidebar_tab(sidebar, win)
+	local tab = sidebar_tabpage(sidebar)
+	if not tab or not vim.api.nvim_tabpage_is_valid(tab) then
+		return false
+	end
+	if vim.api.nvim_get_current_tabpage() ~= tab then
+		vim.api.nvim_set_current_tabpage(tab)
+	end
+	if is_valid_win(win) then
+		vim.api.nvim_set_current_win(win)
+	end
+	return true
 end
 
 local function selected_item()
@@ -122,10 +147,21 @@ local function preferred_sidebar_width()
 	if type(configured) == "number" then
 		return configured
 	end
-	-- Cards are deliberately narrow and wrap.  The calendar is the one view
-	-- that needs seven full cells, so it expands only while it is visible.
-	return sidebar_state().mode == "calendar" and 28 or 22
+	-- Keep the sidebar stable while toggling the calendar.  Twenty-eight
+	-- columns also gives the calendar its seven four-column cells.
+	return 28
 end
+
+local function preferred_preview_width()
+	local configured = state_mod.get().config.sidebar.preview_width
+	if type(configured) == "number" then
+		return math.max(5, math.floor(configured))
+	end
+	-- Keep the original full-layout proportion unless the user explicitly
+	-- overrides it. This leaves a genuinely usable Markdown editor by default.
+	return math.max(20, math.floor(vim.o.columns * 0.30))
+end
+
 
 local function display_width(text)
 	return vim.fn.strdisplaywidth(text or "")
@@ -245,6 +281,11 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "SeijakuMissingTarget", { link = "DiagnosticWarn" })
 	vim.api.nvim_set_hl(0, "SeijakuNote", { link = "Normal" })
 	vim.api.nvim_set_hl(0, "SeijakuCalendarMonth", { fg = palette.brand, ctermfg = palette.brand_cterm })
+	vim.api.nvim_set_hl(
+		0,
+		"SeijakuCalendarNoteDate",
+		{ fg = palette.active, ctermfg = palette.active_cterm, bold = true }
+	)
 	vim.api.nvim_set_hl(0, "SeijakuCalendarToday", { link = "DiagnosticInfo" })
 	vim.api.nvim_set_hl(
 		0,
@@ -293,6 +334,7 @@ local function apply_highlights(buf, lines, line_items)
 		target = "SeijakuTarget",
 		folder = "SeijakuTarget",
 		calendar_month = "SeijakuCalendarMonth",
+		calendar_note_date = "SeijakuCalendarNoteDate",
 		calendar_weekdays = "SeijakuSubheader",
 	}
 
@@ -398,6 +440,15 @@ local function apply_highlights(buf, lines, line_items)
 				hl_group = item.missing_target and "SeijakuMissingTarget" or "SeijakuTarget",
 				hl_mode = "replace",
 				priority = 110,
+			})
+		end
+
+		if item and item.kind == "note" and item.calendar_start then
+			vim.api.nvim_buf_set_extmark(buf, highlight_ns, line - 1, item.calendar_start, {
+				end_col = item.calendar_end,
+				hl_group = "SeijakuCalendarNoteDate",
+				hl_mode = "combine",
+				priority = 120,
 			})
 		end
 
@@ -644,8 +695,8 @@ append_note_card = function(lines, line_items, note, exists_cache)
 	if note.notebook_id then
 		local book = index.get_notebook(note.notebook_id)
 		title_details.project_start = #title_prefix
-		local project_icon = book and book.icon or nil
-		title_prefix = title_prefix .. (project_icon or "●") .. " "
+		local project_icon = book and (book.icon or default_notebook_icon) or nil
+		title_prefix = title_prefix .. (project_icon or default_notebook_icon) .. " "
 		title_details.project_end = #title_prefix - 1
 		title_details.project_color = book and book.color or nil
 	end
@@ -658,36 +709,62 @@ append_note_card = function(lines, line_items, note, exists_cache)
 	})
 
 	local created = tostring(note.created_at or ""):match("^(%d%d%d%d%-%d%d%-%d%d)")
-	local meta = created or ""
-	local tag_ranges = {}
-	local function flush_meta()
-		if meta ~= "" then
-			append(meta, "meta", { tag_ranges = tag_ranges })
-			meta = ""
-			tag_ranges = {}
-		end
+	local calendar_date = tostring(note.calendar_date or "")
+	local date_line = created or ""
+	local calendar_start, calendar_end
+	if calendar_date ~= "" and calendar_date ~= created then
+		calendar_start = #date_line + (date_line ~= "" and 2 or 0)
+		date_line = date_line .. (date_line ~= "" and "  " or "") .. calendar_date
+		calendar_end = #date_line
 	end
+	if date_line ~= "" then
+		append(date_line, "meta", {
+			calendar_start = calendar_start,
+			calendar_end = calendar_end,
+		})
+	end
+
+	local detail_line, tag_ranges = "", {}
 	for _, tag in ipairs(note.tags or {}) do
-		local separator = meta ~= "" and " " or ""
-		if meta ~= "" and display_width(meta .. separator .. "■") > width then
-			flush_meta()
-			separator = ""
+		local separator = detail_line ~= "" and " " or ""
+		if detail_line ~= "" and display_width(detail_line .. separator .. tag_icon) > width then
+			append(detail_line, "tags", { tag_ranges = tag_ranges })
+			detail_line, tag_ranges, separator = "", {}, ""
 		end
-		meta = meta .. separator
-		local start_col = #meta
-		meta = meta .. "■"
-		table.insert(tag_ranges, { start_col = start_col, end_col = #meta, tag = tag })
+		detail_line = detail_line .. separator
+		local start_col = #detail_line
+		detail_line = detail_line .. tag_icon
+		table.insert(tag_ranges, { start_col = start_col, end_col = #detail_line, tag = tag })
 	end
-	flush_meta()
 
 	for _, target in ipairs(note.targets or {}) do
 		if target.path then
 			local missing = not target_exists(target.path, exists_cache)
-			local target_prefix = missing and "! " or "↗ "
-			append_wrapped(target_prefix, paths.basename(target.path), "target", {
-				missing_target = missing,
-			})
+			local target_text = (missing and "! " or "↗ ") .. paths.basename(target.path)
+			local separator = detail_line ~= "" and "  " or ""
+			if detail_line ~= "" and display_width(detail_line .. separator .. target_text) <= width then
+				local target_start = #detail_line + #separator
+				detail_line = detail_line .. separator .. target_text
+				append(detail_line, "tags", {
+					tag_ranges = tag_ranges,
+					target_start = target_start,
+					target_end = #detail_line,
+					missing_target = missing,
+				})
+				detail_line, tag_ranges = "", {}
+			else
+				if detail_line ~= "" then
+					append(detail_line, "tags", { tag_ranges = tag_ranges })
+					detail_line, tag_ranges = "", {}
+				end
+				append_wrapped(missing and "! " or "↗ ", paths.basename(target.path), "target", {
+					missing_target = missing,
+				})
+			end
 		end
+	end
+	if detail_line ~= "" then
+		append(detail_line, "tags", { tag_ranges = tag_ranges })
 	end
 end
 
@@ -701,6 +778,12 @@ end
 local function close_preview_window()
 	local sidebar = sidebar_state()
 
+	if is_valid_win(sidebar.note_header_win) then
+		if vim.api.nvim_get_current_win() == sidebar.note_header_win and is_valid_win(sidebar.preview_win) then
+			vim.api.nvim_set_current_win(sidebar.preview_win)
+		end
+		vim.api.nvim_win_close(sidebar.note_header_win, true)
+	end
 	if is_valid_win(sidebar.preview_win) then
 		vim.api.nvim_win_close(sidebar.preview_win, true)
 	end
@@ -711,11 +794,39 @@ local function close_preview_window()
 	sidebar.preview_win = nil
 	sidebar.preview_buf = nil
 	sidebar.preview_note_id = nil
+	sidebar.note_header_win = nil
+	sidebar.note_header_buf = nil
+	sidebar.preview_width_initialized = false
 end
 
 local function rebalance_normal_layout()
-	layout.rebalance_sidebar(sidebar_state(), preferred_sidebar_width())
+	local sidebar = sidebar_state()
+	layout.rebalance_sidebar(sidebar, preferred_sidebar_width(), preferred_preview_width())
 end
+
+local function schedule_layout_rebalance()
+	if layout_rebalance_timer then
+		layout_rebalance_timer:stop()
+		layout_rebalance_timer:close()
+	end
+	local timer = vim.loop.new_timer()
+	layout_rebalance_timer = timer
+	timer:start(20, 0, vim.schedule_wrap(function()
+		if layout_rebalance_timer == timer then
+			layout_rebalance_timer = nil
+		end
+		if not timer:is_closing() then
+			timer:stop()
+			timer:close()
+		end
+		local sidebar = sidebar_state()
+		if sidebar.open and not sidebar.closing then
+			rebalance_normal_layout()
+		end
+	end))
+end
+
+M.schedule_layout_rebalance = schedule_layout_rebalance
 
 function M.reconcile_note_windows()
 	local sidebar = sidebar_state()
@@ -726,7 +837,6 @@ function M.reconcile_note_windows()
 		M.close()
 		return
 	end
-	rebalance_normal_layout()
 end
 
 function M.redirect_calendar_entry(from_win, entered_win)
@@ -767,13 +877,26 @@ function M.redirect_calendar_entry(from_win, entered_win)
 	return true
 end
 
--- Header and selector windows are visual parts of the sidebar, not separate
--- work panes.  Window navigation therefore always lands on the note list (or
--- the calendar day list) instead of exposing those implementation buffers.
 function M.redirect_sidebar_entry(from_win, entered_win)
 	local sidebar = sidebar_state()
 	if not sidebar.open then
 		return false
+	end
+	local entered_selector = entered_win == sidebar.notebook_win or entered_win == sidebar.tag_win
+	if entered_selector then
+		if sidebar.selector_saved_winwidth == nil then
+			sidebar.selector_saved_winwidth = vim.o.winwidth
+		end
+		-- 'winwidth' is applied to the focused window even when winfixwidth is
+		-- set. Lower it only while a compact selector owns focus.
+		vim.o.winwidth = 1
+		rebalance_normal_layout()
+	else
+		if sidebar.selector_saved_winwidth ~= nil then
+			local saved = sidebar.selector_saved_winwidth
+			sidebar.selector_saved_winwidth = nil
+			vim.o.winwidth = saved
+		end
 	end
 
 	if entered_win == sidebar.win then
@@ -782,7 +905,12 @@ function M.redirect_sidebar_entry(from_win, entered_win)
 	if entered_win == sidebar.header_win and sidebar.search_active then
 		return false
 	end
-	if entered_win ~= sidebar.header_win and entered_win ~= sidebar.notebook_win and entered_win ~= sidebar.tag_win then
+	-- Notebook and tag selectors are interactive: their <CR> mappings edit the
+	-- selected entity, while Space applies it as a filter.
+	if entered_selector then
+		return false
+	end
+	if entered_win ~= sidebar.header_win then
 		return false
 	end
 
@@ -1131,16 +1259,16 @@ local function render_selector_panels()
 	local sidebar = sidebar_state()
 	local selector_width = 3
 	for _, book in ipairs(index.list_notebooks()) do
-		selector_width = math.max(selector_width, display_width((book.icon or "●") .. " " .. book.name))
+		selector_width = math.max(selector_width, display_width((book.icon or default_notebook_icon) .. " " .. book.name))
 	end
 	for _, tag in ipairs(index.list_tags()) do
-		selector_width = math.max(selector_width, display_width("■ " .. tag))
+		selector_width = math.max(selector_width, display_width(tag_icon .. " " .. tag))
 	end
 	sidebar.selector_width = selector_width
 	if is_valid_buf(sidebar.notebook_buf) then
 		local lines, items = {}, {}
 		for _, book in ipairs(index.list_notebooks()) do
-			table.insert(lines, (book.icon or "●") .. " " .. book.name)
+			table.insert(lines, (book.icon or default_notebook_icon) .. " " .. book.name)
 			items[#lines] = { id = book.id, color = book.color, icon = book.icon }
 		end
 		sidebar.notebook_items = items
@@ -1189,7 +1317,7 @@ local function render_selector_panels()
 					})
 				else
 					vim.api.nvim_buf_set_extmark(sidebar.notebook_buf, highlight_ns, line - 1, 0, {
-						end_col = #(item.icon or "●"),
+						end_col = #(item.icon or default_notebook_icon),
 						hl_group = glyph_group,
 						hl_mode = "combine",
 						priority = 130,
@@ -1204,7 +1332,7 @@ local function render_selector_panels()
 	if is_valid_buf(sidebar.tag_buf) then
 		local lines, items = {}, {}
 		for _, tag in ipairs(index.list_tags()) do
-			table.insert(lines, "■ " .. tag)
+			table.insert(lines, tag_icon .. " " .. tag)
 			items[#lines] = { tag = tag }
 		end
 		sidebar.tag_items = items
@@ -1251,7 +1379,7 @@ local function render_selector_panels()
 				})
 
 				vim.api.nvim_buf_set_extmark(sidebar.tag_buf, highlight_ns, line - 1, 0, {
-					end_col = #"■",
+					end_col = #tag_icon,
 					hl_group = tag_group,
 					hl_mode = "combine",
 					priority = 130,
@@ -1259,7 +1387,6 @@ local function render_selector_panels()
 			end
 		end
 	end
-	rebalance_normal_layout()
 end
 
 function M.refresh()
@@ -1355,6 +1482,14 @@ function M.refresh()
 		M.sync_calendar_preview()
 	end
 	update_visible_card_selection()
+	-- The preview context strip is a separate immutable buffer, so refresh it
+	-- independently when an attribute changes without switching notes.
+	if is_valid_win(sidebar.preview_win) then
+		M.open_preview(sidebar.preview_note_id)
+	end
+	-- Let Neovim finish split creation and redraw before enforcing compact pane
+	-- widths; synchronous resizing here gets undone during the same refresh.
+	schedule_layout_rebalance()
 end
 
 function M.schedule_refresh()
@@ -1383,6 +1518,7 @@ function M.open()
 
 	if is_valid_win(sidebar.win) then
 		sidebar.open = true
+		focus_sidebar_tab(sidebar, sidebar.win)
 		M.refresh()
 		return
 	end
@@ -1437,12 +1573,130 @@ function M.open()
 	end
 end
 
+function M.full_layout()
+	local sidebar = sidebar_state()
+	if not sidebar.open or not is_valid_win(sidebar.win) then
+		M.open()
+		sidebar = sidebar_state()
+	end
+	if not is_valid_win(sidebar.preview_win) then
+		return false
+	end
+	focus_sidebar_tab(sidebar, sidebar.preview_win)
+
+	if sidebar.mode ~= "all" then
+		M.set_mode("all")
+		sidebar = sidebar_state()
+	end
+	rebalance_normal_layout()
+	vim.api.nvim_set_current_win(sidebar.preview_win)
+
+	local managed_buffers = {}
+	for _, buf in ipairs({
+		sidebar.buf,
+		sidebar.header_buf,
+		sidebar.notebook_buf,
+		sidebar.tag_buf,
+		sidebar.note_header_buf,
+		sidebar.preview_buf,
+		sidebar.calendar_notes_buf,
+	}) do
+		if is_valid_buf(buf) then
+			managed_buffers[buf] = true
+		end
+	end
+
+	-- Closing a split can run user autocmds that create or rearrange windows.
+	-- Re-evaluate the tab a few times so Full cannot leave a residual host pane.
+	for _ = 1, 4 do
+		local managed = layout.managed_windows(sidebar)
+		local external = {}
+		for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+			if is_valid_win(win) and vim.api.nvim_win_get_config(win).relative == "" and not managed[win] then
+				table.insert(external, win)
+			end
+		end
+		if #external == 0 then
+			break
+		end
+		for _, win in ipairs(external) do
+			if is_valid_win(win) then
+				local ok, err = pcall(vim.api.nvim_win_close, win, true)
+				if not ok then
+					vim.notify("seijaku: cannot close another window: " .. tostring(err), vim.log.levels.WARN)
+					return false
+				end
+			end
+		end
+	end
+	-- Full mode is a fresh Seijaku workspace, rather than merely a different
+	-- window arrangement. Remove prior, unmodified listed buffers as well.
+	-- Modified buffers are intentionally retained in memory to avoid data loss.
+	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+		if
+			vim.api.nvim_buf_is_valid(buf)
+			and vim.bo[buf].buflisted
+			and not vim.bo[buf].modified
+			and not managed_buffers[buf]
+		then
+			pcall(vim.api.nvim_buf_delete, buf, { force = false })
+		end
+	end
+	sidebar.note_bufs = {}
+	if is_valid_buf(sidebar.preview_buf) then
+		sidebar.note_bufs[sidebar.preview_buf] = true
+	end
+
+	sidebar.source_win = nil
+	local preview_width = math.max(5, vim.o.columns - vim.api.nvim_win_get_width(sidebar.header_win) - 1)
+	for _, win in ipairs({ sidebar.preview_win, sidebar.note_header_win }) do
+		if is_valid_win(win) then
+			vim.wo[win].winfixwidth = false
+		end
+	end
+	local min_width, preferred_width = vim.o.winminwidth, vim.o.winwidth
+	vim.o.winminwidth, vim.o.winwidth = 1, 1
+	pcall(vim.api.nvim_win_set_width, sidebar.preview_win, preview_width)
+	vim.o.winminwidth, vim.o.winwidth = min_width, preferred_width
+	-- WinClosed handlers run on the next loop. Audit once after them so a
+	-- scratch/host window recreated by an autocmd cannot survive Full mode.
+	vim.schedule(function()
+		local current = sidebar_state()
+		if not current.open or not is_valid_win(current.preview_win) then
+			return
+		end
+		local current_managed = layout.managed_windows(current)
+		vim.api.nvim_set_current_win(current.preview_win)
+		for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+			if
+				is_valid_win(win)
+				and vim.api.nvim_win_get_config(win).relative == ""
+				and not current_managed[win]
+			then
+				pcall(vim.api.nvim_win_close, win, true)
+			end
+		end
+		if is_valid_win(current.header_win) then
+			pcall(
+				vim.api.nvim_win_set_width,
+				current.preview_win,
+				math.max(5, vim.o.columns - vim.api.nvim_win_get_width(current.header_win) - 1)
+			)
+		end
+	end)
+	return true
+end
+
 function M.close()
 	local sidebar = sidebar_state()
 	if sidebar.closing then
 		return
 	end
 	sidebar.closing = true
+	if sidebar.selector_saved_winwidth ~= nil then
+		vim.o.winwidth = sidebar.selector_saved_winwidth
+		sidebar.selector_saved_winwidth = nil
+	end
 	if stop_calendar_day_timer then
 		stop_calendar_day_timer()
 	end
@@ -1496,6 +1750,88 @@ local function set_preview_placeholder(sidebar, message)
 	sidebar.note_bufs[buf] = true
 end
 
+local function notebook_header_highlight(notebook)
+	if not notebook or type(notebook.color) ~= "string" or not notebook.color:match("^#%x%x%x%x%x%x$") then
+		return "SeijakuTag"
+	end
+	local group = "SeijakuPreviewNotebook_" .. notebook.color:sub(2)
+	if not notebook_hl_cache[group] then
+		vim.api.nvim_set_hl(0, group, { fg = notebook.color, bg = "NONE", bold = true })
+		notebook_hl_cache[group] = true
+	end
+	return group
+end
+
+local function render_note_header(note_id)
+	local sidebar = sidebar_state()
+	if not is_valid_buf(sidebar.note_header_buf) then
+		return
+	end
+	local note = note_id and index.get_note(note_id) or nil
+	local chunks = {}
+	local function add(text, group)
+		if #chunks > 0 then
+			table.insert(chunks, { "  ", "Normal" })
+		end
+		table.insert(chunks, { text, group })
+	end
+	if note then
+		if note.pinned then
+			add(pin_icon:gsub("%s+$", " "), "SeijakuPinned")
+		end
+		local notebook = note.notebook_id and index.get_notebook(note.notebook_id) or nil
+		if note.notebook_id then
+			add(
+				(notebook and notebook.icon or default_notebook_icon) .. " " .. (notebook and notebook.name or note.notebook_id),
+				notebook_header_highlight(notebook)
+			)
+		end
+		for _, tag in ipairs(note.tags or {}) do
+			add(tag_icon .. " " .. tag, notes.tag_glyph_highlight(tag))
+		end
+	end
+
+	local text, offset = "", 0
+	for _, chunk in ipairs(chunks) do
+		text = text .. chunk[1]
+	end
+	with_modifiable(sidebar.note_header_buf, function()
+		vim.api.nvim_buf_set_lines(sidebar.note_header_buf, 0, -1, false, { text })
+		vim.api.nvim_buf_clear_namespace(sidebar.note_header_buf, highlight_ns, 0, -1)
+		for _, chunk in ipairs(chunks) do
+			vim.api.nvim_buf_set_extmark(sidebar.note_header_buf, highlight_ns, 0, offset, {
+				end_col = offset + #chunk[1],
+				hl_group = chunk[2],
+				hl_mode = "combine",
+			})
+			offset = offset + #chunk[1]
+		end
+	end)
+end
+
+local function ensure_note_header_window(sidebar)
+	if not is_valid_win(sidebar.preview_win) then
+		return
+	end
+	if not is_valid_buf(sidebar.note_header_buf) then
+		sidebar.note_header_buf = vim.api.nvim_create_buf(false, true)
+		set_sidebar_options(sidebar.note_header_buf)
+	end
+	if not is_valid_win(sidebar.note_header_win) then
+		local current = vim.api.nvim_get_current_win()
+		vim.api.nvim_set_current_win(sidebar.preview_win)
+		vim.cmd("aboveleft split")
+		sidebar.note_header_win = vim.api.nvim_get_current_win()
+		vim.api.nvim_win_set_buf(sidebar.note_header_win, sidebar.note_header_buf)
+		panel_options(sidebar.note_header_win)
+		vim.api.nvim_win_set_height(sidebar.note_header_win, 1)
+		vim.wo[sidebar.note_header_win].winfixheight = true
+		if is_valid_win(current) then
+			vim.api.nvim_set_current_win(current)
+		end
+	end
+end
+
 function M.open_preview(note_id, opts)
 	opts = opts or {}
 	local sidebar = sidebar_state()
@@ -1504,6 +1840,7 @@ function M.open_preview(note_id, opts)
 	end
 
 	if note_id == sidebar.preview_note_id and is_valid_win(sidebar.preview_win) then
+		render_note_header(note_id)
 		if opts.focus then
 			vim.api.nvim_set_current_win(sidebar.preview_win)
 		end
@@ -1516,16 +1853,18 @@ function M.open_preview(note_id, opts)
 		local position = state_mod.get().config.sidebar.position or "right"
 		vim.cmd(position == "left" and "rightbelow vsplit" or "leftabove vsplit")
 		sidebar.preview_win = vim.api.nvim_get_current_win()
-		pcall(vim.api.nvim_win_set_width, sidebar.preview_win, math.max(20, math.floor(vim.o.columns * 0.30)))
-		vim.wo[sidebar.preview_win].winfixwidth = true
+		sidebar.preview_width_initialized = false
+		vim.wo[sidebar.preview_win].winfixwidth = false
 		set_preview_placeholder(sidebar, "Select a note")
 	end
+	ensure_note_header_window(sidebar)
 
 	local note = note_id and index.get_note(note_id) or nil
 	if note then
 		local abs_path = paths.join(state_mod.get().vault_dir, note.file)
 		if vim.fn.filereadable(abs_path) == 0 then
 			set_preview_placeholder(sidebar, "Note file is missing")
+			render_note_header(nil)
 			if opts.focus then
 				vim.api.nvim_set_current_win(sidebar.preview_win)
 			elseif is_valid_win(return_win) then
@@ -1537,13 +1876,18 @@ function M.open_preview(note_id, opts)
 		local loaded = pcall(vim.fn.bufload, buf)
 		if not loaded then
 			set_preview_placeholder(sidebar, "Unable to load note")
+			render_note_header(nil)
 			return false
 		end
+		notes.clean_legacy_metadata(note, buf)
 		vim.api.nvim_win_set_buf(sidebar.preview_win, buf)
 		sidebar.preview_buf = buf
 		sidebar.preview_note_id = note_id
 		sidebar.note_bufs[buf] = true
 		notes.apply_window_options(sidebar.preview_win)
+		render_note_header(note_id)
+	else
+		render_note_header(nil)
 	end
 	if opts.focus and is_valid_win(sidebar.preview_win) then
 		vim.api.nvim_set_current_win(sidebar.preview_win)
@@ -1641,7 +1985,12 @@ function M.toggle()
 	local sidebar = sidebar_state()
 
 	if sidebar.open and is_valid_win(sidebar.win) then
-		M.close()
+		local owner_tab = sidebar_tabpage(sidebar)
+		if owner_tab and owner_tab ~= vim.api.nvim_get_current_tabpage() then
+			focus_sidebar_tab(sidebar, sidebar.win)
+		else
+			M.close()
+		end
 	else
 		M.open()
 	end
@@ -1759,6 +2108,83 @@ function M.handle_pin()
 	end
 	vim.notify("seijaku: note " .. (pinned and "pinned" or "unpinned"))
 	M.refresh()
+end
+
+local function edit_notebook(notebook)
+	if not notebook then
+		return
+	end
+	picker.input({ title = " notebook name ", default = notebook.name }, function(name)
+		if not name then
+			return
+		end
+		picker.browse_path(notebook.path or "", function(path)
+			if not path then
+				return
+			end
+			picker.input(
+				{ title = " notebook icon · optional ", default = notebook.icon or default_notebook_icon, allow_empty = true },
+				function(icon)
+					if icon == nil then
+						return
+					end
+					picker.input(
+						{ title = " notebook color · #RRGGBB ", default = notebook.color or "", allow_empty = false },
+						function(color)
+							if not color then
+								return
+							end
+							local ok, err = index.update_notebook(notebook.id, {
+								name = name,
+								path = path,
+								icon = icon ~= "" and icon or false,
+								color = color,
+							})
+							if not ok then
+								vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
+								return
+							end
+							M.refresh()
+						end
+					)
+				end
+			)
+		end)
+	end)
+end
+
+local function edit_tag(tag)
+	if not tag then
+		return
+	end
+	picker.input({ title = " tag name ", default = tag }, function(name)
+		if not name then
+			return
+		end
+		picker.input(
+			{ title = " tag color · #RRGGBB ", default = index.get_tag_color(tag) or "", allow_empty = false },
+			function(color)
+				if not color then
+					return
+				end
+				local ok, err = index.rename_tag(tag, name)
+				if not ok then
+					vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
+					return
+				end
+				ok, err = index.set_tag_color(name, color)
+				if not ok then
+					vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
+					return
+				end
+				local sidebar = sidebar_state()
+				if sidebar.all_tag == tag then
+					sidebar.all_tag = vim.trim(name):lower()
+				end
+				M.refresh()
+			end
+		)
+	end)
 end
 
 function M.handle_open_target()
@@ -1882,6 +2308,9 @@ end
 
 function M.finish_title_filter()
 	local sidebar = sidebar_state()
+	-- `<CR>` is pressed from Insert mode in the search field. Leave that mode
+	-- before moving to the immutable note list, otherwise Insert follows focus.
+	pcall(vim.cmd, "stopinsert")
 	sidebar.search_active = false
 	if is_valid_win(sidebar.win) then
 		vim.api.nvim_set_current_win(sidebar.win)
@@ -2121,10 +2550,29 @@ end
 
 function M.setup_notebook_mappings(buf)
 	local opts = { buffer = buf, silent = true, nowait = true }
+	local function apply_hovered_notebook()
+		local sidebar = sidebar_state()
+		if vim.api.nvim_get_current_win() ~= sidebar.notebook_win then
+			return
+		end
+		local item = sidebar.notebook_items[vim.api.nvim_win_get_cursor(0)[1]]
+		if item and sidebar.all_notebook ~= item.id then
+			sidebar.all_notebook = item.id
+			M.refresh()
+			M.sync_mode_preview(true)
+		end
+	end
 	vim.keymap.set("n", "<CR>", function()
 		local sidebar = sidebar_state()
 		local line = vim.api.nvim_win_get_cursor(0)[1]
 		local item = sidebar.notebook_items[line]
+		if item then
+			edit_notebook(index.get_notebook(item.id))
+		end
+	end, opts)
+	vim.keymap.set("n", "<Space>", function()
+		local sidebar = sidebar_state()
+		local item = sidebar.notebook_items[vim.api.nvim_win_get_cursor(0)[1]]
 		if item then
 			sidebar.all_notebook = item.id
 			M.refresh()
@@ -2144,6 +2592,10 @@ function M.setup_notebook_mappings(buf)
 		M.cycle_tag(-1)
 	end, opts)
 	vim.keymap.set("n", "C", M.toggle_mode, opts)
+	vim.api.nvim_create_autocmd("CursorMoved", {
+		buffer = buf,
+		callback = apply_hovered_notebook,
+	})
 end
 
 function M.setup_header_mappings(buf)
@@ -2164,10 +2616,29 @@ end
 
 function M.setup_tag_mappings(buf)
 	local opts = { buffer = buf, silent = true, nowait = true }
+	local function apply_hovered_tag()
+		local sidebar = sidebar_state()
+		if vim.api.nvim_get_current_win() ~= sidebar.tag_win then
+			return
+		end
+		local item = sidebar.tag_items[vim.api.nvim_win_get_cursor(0)[1]]
+		if item and sidebar.all_tag ~= item.tag then
+			sidebar.all_tag = item.tag
+			M.refresh()
+			M.sync_mode_preview(true)
+		end
+	end
 	vim.keymap.set("n", "<CR>", function()
 		local sidebar = sidebar_state()
 		local line = vim.api.nvim_win_get_cursor(0)[1]
 		local item = sidebar.tag_items[line]
+		if item then
+			edit_tag(item.tag)
+		end
+	end, opts)
+	vim.keymap.set("n", "<Space>", function()
+		local sidebar = sidebar_state()
+		local item = sidebar.tag_items[vim.api.nvim_win_get_cursor(0)[1]]
 		if item then
 			sidebar.all_tag = item.tag
 			M.refresh()
@@ -2188,6 +2659,10 @@ function M.setup_tag_mappings(buf)
 	end, opts)
 	vim.keymap.set("n", "C", M.toggle_mode, opts)
 	vim.keymap.set("n", "/", M.prompt_title_filter, opts)
+	vim.api.nvim_create_autocmd("CursorMoved", {
+		buffer = buf,
+		callback = apply_hovered_tag,
+	})
 end
 
 function M.setup_calendar_notes_mappings(buf)
@@ -2199,6 +2674,19 @@ function M.setup_calendar_notes_mappings(buf)
 	for _, lhs in ipairs({ "i", "I", "A", "O", "c", "S" }) do
 		vim.keymap.set({ "n", "x" }, lhs, "<Nop>", opts)
 	end
+	for _, lhs in ipairs({ "gi", "gI", "<Insert>" }) do
+		vim.keymap.set("n", lhs, "<Nop>", opts)
+	end
+	vim.api.nvim_create_autocmd("InsertEnter", {
+		buffer = buf,
+		callback = function()
+			vim.schedule(function()
+				if vim.api.nvim_get_current_buf() == buf then
+					vim.cmd("stopinsert")
+				end
+			end)
+		end,
+	})
 
 	vim.keymap.set("n", "<CR>", M.handle_calendar_note_enter, opts)
 	vim.keymap.set("n", "a", M.handle_create_for_context, opts)
@@ -2281,6 +2769,19 @@ function M.setup_mappings(buf)
 	for _, lhs in ipairs({ "i", "I", "A", "O", "c", "S" }) do
 		vim.keymap.set({ "n", "x" }, lhs, "<Nop>", opts)
 	end
+	for _, lhs in ipairs({ "gi", "gI", "<Insert>" }) do
+		vim.keymap.set("n", lhs, "<Nop>", opts)
+	end
+	vim.api.nvim_create_autocmd("InsertEnter", {
+		buffer = buf,
+		callback = function()
+			vim.schedule(function()
+				if vim.api.nvim_get_current_buf() == buf then
+					vim.cmd("stopinsert")
+				end
+			end)
+		end,
+	})
 	vim.keymap.set("n", "h", function()
 		calendar_or_normal(function()
 			M.calendar_move_days(-1)

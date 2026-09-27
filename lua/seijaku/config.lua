@@ -17,7 +17,6 @@ local defaults = {
     wrap = true,
     linebreak = true,
     breakindent = true,
-    fold_metadata = true,
   },
 
   appearance = {
@@ -28,15 +27,19 @@ local defaults = {
   notes = {
     templates = {
       blank = {},
-      journal = { "## Entry", "" },
+      journal = { "## {date}", "", "## Entry", "", "## Reflection", "" },
       meeting = {
         "## Attendees", "",
         "## Agenda", "",
         "## Notes", "",
-        "## Actions", "",
+        "## Decisions", "",
+        "## Actions", "", "- [ ] ",
       },
-      description = { "## Description", "", "## Context", "" },
-      tasks = { "## Tasks", "", "- [ ] " },
+      description = { "## Overview", "", "## Details", "", "## Context", "", "## References", "" },
+      tasks = { "## Tasks", "", "- [ ] ", "" },
+      idea = { "## Idea", "", "## Why now", "", "## Next step", "" },
+      research = { "## Question", "", "## Notes", "", "## Sources", "", "## Conclusion", "" },
+      project = { "## Goal", "", "## Scope", "", "## Plan", "", "## Open questions", "" },
     },
   },
 

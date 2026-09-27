@@ -479,7 +479,7 @@ local function commit_note(opts, template_id, notebook_id, tags, title)
 	end
 	if opts.open ~= false then
 		local sidebar_ok, sidebar = pcall(require, "seijaku.sidebar")
-		local opened_in_sidebar = sidebar_ok and sidebar.open_preview(note_id, { force = true, focus = true })
+		local opened_in_sidebar = sidebar_ok and sidebar.open_preview(note_id, { force = true, focus = true, reopen = true })
 		if not opened_in_sidebar then
 			M.open(note_id)
 		end
@@ -493,13 +493,21 @@ end
 
 function M.create(opts)
 	opts = opts or {}
+	-- A note attached anywhere below a notebook's working directory belongs to
+	-- that notebook by default.  An explicitly supplied notebook still wins.
+	local inferred_notebook_id = nil
+	if opts.notebook_id == nil and opts.target_path then
+		local notebook = index.notebook_for_target_path(opts.target_path)
+		inferred_notebook_id = notebook and notebook.id or nil
+	end
 	if opts.prompt == false then
-		return commit_note(opts, opts.template_id or "blank", opts.notebook_id, opts.tags, opts.title)
+		local notebook_id = opts.notebook_id ~= nil and opts.notebook_id or inferred_notebook_id
+		return commit_note(opts, opts.template_id or "blank", notebook_id, opts.tags, opts.title)
 	end
 	return picker.note_form({
 		title = opts.title,
 		template_id = opts.template_id or "blank",
-		notebook_id = opts.notebook_id,
+		notebook_id = opts.notebook_id ~= nil and opts.notebook_id or inferred_notebook_id,
 		target_path = opts.target_path,
 		tags = opts.tags,
 		templates = template_choices(),
@@ -524,6 +532,12 @@ function M.create(opts)
 			return
 		end
 		request.target_type = request.target_path and paths.target_type(request.target_path) or nil
+		-- Keep the automatic choice in sync if the target was picked or changed
+		-- inside the composer. A manual notebook selection always takes priority.
+		if opts.notebook_id == nil and values.notebook_id == inferred_notebook_id and request.target_path then
+			local notebook = index.notebook_for_target_path(request.target_path)
+			request.notebook_id = notebook and notebook.id or nil
+		end
 		commit_note(request, request.template_id, request.notebook_id, request.tags, request.title)
 	end)
 end

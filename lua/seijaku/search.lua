@@ -45,7 +45,7 @@ local function open_match(entry)
   end
 
   local sidebar = require("seijaku.sidebar")
-  local opened = sidebar.open_preview(note.id, { force = true, focus = true })
+	local opened = sidebar.open_preview(note.id, { force = true, focus = true, reopen = true })
   if not opened then
     require("seijaku.notes").open(note.id)
   end

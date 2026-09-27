@@ -215,11 +215,15 @@ end
 -- the exact composer state the user left behind.
 function M.browse_path(initial, callback)
   local origin = vim.api.nvim_get_current_win()
-  local directory = vim.fn.fnamemodify(initial ~= "" and initial or vim.loop.cwd(), ":p")
-  if vim.fn.isdirectory(directory) == 0 then
-    directory = vim.fn.fnamemodify(directory, ":h")
+  local function normalize_directory(path)
+    local normalized = vim.fn.fnamemodify(path, ":p")
+    return normalized == "/" and normalized or normalized:gsub("/$", "")
   end
-  directory = directory:gsub("/$", "")
+
+  local directory = normalize_directory(initial ~= "" and initial or vim.loop.cwd())
+  if vim.fn.isdirectory(directory) == 0 then
+    directory = normalize_directory(vim.fn.fnamemodify(directory, ":h"))
+  end
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].buftype, vim.bo[buf].bufhidden, vim.bo[buf].swapfile = "nofile", "wipe", false
   local width = math.min(70, math.max(38, vim.o.columns - 4))
@@ -254,7 +258,7 @@ function M.browse_path(initial, callback)
       { label = "..", path = vim.fn.fnamemodify(directory, ":h"), directory = true },
     }
     for _, name in ipairs(names) do
-      local path = directory .. "/" .. name
+      local path = directory == "/" and ("/" .. name) or (directory .. "/" .. name)
       table.insert(entries, { label = name, path = path, directory = vim.fn.isdirectory(path) == 1 })
     end
     local lines = {}
@@ -267,7 +271,7 @@ function M.browse_path(initial, callback)
     vim.api.nvim_win_set_config(win, popup_config(
       width,
       math.min(#lines, math.max(3, vim.o.lines - 6)),
-      " path · enter select · l enter · h up · esc cancel "
+      " path · h parent · l open dir · enter select · esc cancel "
     ))
     vim.api.nvim_win_set_cursor(win, { 1, 0 })
   end
@@ -281,14 +285,14 @@ function M.browse_path(initial, callback)
   local function enter_directory()
     local entry = entries[vim.api.nvim_win_get_cursor(win)[1]]
     if not entry or not entry.directory then return end
-    directory = vim.fn.fnamemodify(entry.path, ":p"):gsub("/$", "")
+    directory = normalize_directory(entry.path)
     render()
   end
   local map_opts = { buffer = buf, silent = true, nowait = true }
   vim.keymap.set("n", "<CR>", select_current, map_opts)
   vim.keymap.set("n", "l", enter_directory, map_opts)
   vim.keymap.set("n", "h", function()
-    directory = vim.fn.fnamemodify(directory, ":h")
+    directory = normalize_directory(vim.fn.fnamemodify(directory, ":h"))
     render()
   end, map_opts)
   vim.keymap.set("n", "<Esc>", function() finish(nil) end, map_opts)

@@ -705,6 +705,28 @@ function M.list_notebooks()
   return result
 end
 
+-- Return the most specific notebook whose working directory contains target.
+-- Notebook paths are normalized when they are written, so this only performs
+-- one normalization and a small in-memory scan during note creation.
+function M.notebook_for_target_path(target)
+  local normalized = paths.normalize(target)
+  if not normalized then
+    return nil
+  end
+
+  local match, match_length
+  for _, notebook in pairs(state_mod.get().notebooks_by_id or {}) do
+    local root = notebook.path
+    if root and root ~= "" and (normalized == root or normalized:sub(1, #root + 1) == root .. "/") then
+      local length = #root
+      if not match_length or length > match_length then
+        match, match_length = notebook, length
+      end
+    end
+  end
+  return match
+end
+
 local function notebook_name_exists(name, except_id)
   for id, notebook in pairs(state_mod.get().notebooks_by_id or {}) do
     if id ~= except_id and (notebook.name or ""):lower() == name:lower() then
@@ -1069,6 +1091,14 @@ function M.list_tags()
       end
     end
   end
+  -- A persisted colour also represents an explicitly created tag, even before
+  -- that tag has been assigned to its first note.
+  for tag, _ in pairs((state_mod.get().index or {}).tag_colors or {}) do
+    if tag ~= "" and not seen[tag] then
+      seen[tag] = true
+      table.insert(result, tag)
+    end
+  end
   table.sort(result)
   return result
 end
@@ -1083,6 +1113,9 @@ function M.set_tag_color(tag, color)
   tag = vim.trim(tostring(tag or "")):lower()
   if tag == "" then
     return false, "tag is required"
+  end
+  if tag:find("[`,%c]") then
+    return false, "tags cannot contain commas, backticks or control characters"
   end
   if not valid_color(color) then
     return false, "tag color must be a #RRGGBB value"

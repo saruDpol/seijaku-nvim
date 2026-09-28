@@ -1,6 +1,6 @@
 # 静寂 seijaku.nvim
 
-> A quiet Markdown notebook for Neovim.
+> A quiet, filesystem-aware Markdown notebook for Neovim.
 
 Seijaku is a local, keyboard-first notebook built from ordinary Markdown,
 native Neovim windows and one small JSON index.
@@ -74,37 +74,37 @@ stays yours.
 
 The same picker is used for note targets and notebook working directories.
 
-| Key | Action |
-| --- | --- |
-| `j` / `k` | Move |
-| `h` | Parent directory |
-| `l` | Enter directory |
-| `Space` | Select / clear path |
-| `Enter` | Continue with selected path, or no path |
-| `Esc` | Cancel |
+| Key       | Action                                  |
+| --------- | --------------------------------------- |
+| `j` / `k` | Move                                    |
+| `h`       | Parent directory                        |
+| `l`       | Enter directory                         |
+| `Space`   | Select / clear path                     |
+| `Enter`   | Continue with selected path, or no path |
+| `Esc`     | Cancel                                  |
 
 ## ⌁ Sidebar
 
 Open with `<A-o>` or `:SeijakuToggle`.
 
-| Key | Action |
-| --- | --- |
-| `j` / `k` | Move between notes |
-| `Enter` | Focus the persistent preview |
-| `n` | New note |
-| `a` | Attach a target |
-| `r` | Rename |
-| `dd` | Delete |
-| `p` | Pin / unpin |
-| `T` | Edit tags |
-| `N` | Assign notebook |
-| `o` | Open target in Oil |
-| `s` | Cycle sort order |
+| Key                 | Action                              |
+| ------------------- | ----------------------------------- |
+| `j` / `k`           | Move between notes                  |
+| `Enter`             | Focus the persistent preview        |
+| `n`                 | New note                            |
+| `a`                 | Attach a target                     |
+| `r`                 | Rename                              |
+| `dd`                | Delete                              |
+| `p`                 | Pin / unpin                         |
+| `T`                 | Edit tags                           |
+| `N`                 | Assign notebook                     |
+| `o`                 | Open target in Oil                  |
+| `s`                 | Cycle sort order                    |
 | `Tab` / `Shift-Tab` | Cycle notebooks and no-filter state |
-| `f` / `F` | Cycle tags |
-| `/` | Filter notes |
-| `g/` | Telescope live grep |
-| `C` | Toggle calendar |
+| `f` / `F`           | Cycle tags                          |
+| `/`                 | Filter notes                        |
+| `g/`                | Telescope live grep                 |
+| `C`                 | Toggle calendar                     |
 
 The first entry in both selector panels is `○`: no notebook or no tag filter.
 When active it becomes `●`, with accent colour and bold text.
@@ -123,14 +123,14 @@ both. Unsaved Markdown buffers are kept safely hidden.
 `:SeijakuModeCalendar` opens the calendar. Notes can be assigned an explicit
 date; otherwise they appear on their creation date.
 
-| Key | Action |
-| --- | --- |
-| `h` / `l` | Previous / next day |
-| `j` / `k` | Previous / next week |
-| `[` / `]` | Previous / next month |
-| `t` | Today |
-| `0`–`9` | Jump to a day |
-| `Enter` | Open the selected note |
+| Key       | Action                 |
+| --------- | ---------------------- |
+| `h` / `l` | Previous / next day    |
+| `j` / `k` | Previous / next week   |
+| `[` / `]` | Previous / next month  |
+| `t`       | Today                  |
+| `0`–`9`   | Jump to a day          |
+| `Enter`   | Open the selected note |
 
 ## → Commands
 

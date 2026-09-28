@@ -1,9 +1,14 @@
 local M = {}
 
+local index = require("seijaku.index")
 local active = nil
 local color_ns = vim.api.nvim_create_namespace("seijaku_picker_colors")
 local default_notebook_icon = "■"
 local tag_icon = ""
+
+local function tag_display_icon(tag)
+  return index.get_tag_icon(tag) or tag_icon
+end
 local path_selected_icon = ""
 local path_empty_icon = "󰅖"
 
@@ -98,6 +103,15 @@ local function color_group(color)
   return group
 end
 
+local function selected_color_group(color)
+  if type(color) ~= "string" or not color:match("^#%x%x%x%x%x%x$") then
+    return nil
+  end
+  local group = "SeijakuPickerSelected_" .. color:sub(2)
+  vim.api.nvim_set_hl(0, group, { fg = "#ffffff", bg = color, bold = true })
+  return group
+end
+
 function M.select(items, opts, callback)
   opts = opts or {}
   if #items == 0 then
@@ -127,7 +141,13 @@ function M.select(items, opts, callback)
   end
 
   for line, item in ipairs(items) do
-    local group = item.highlight or color_group(item.color)
+    local is_initial = opts.initial_value ~= nil and item.value == opts.initial_value
+    local group
+    if is_initial then
+      group = item.selected_highlight or selected_color_group(item.color) or "SeijakuSelectorSelected"
+    else
+      group = item.highlight or color_group(item.color)
+    end
     if group then
       vim.api.nvim_buf_set_extmark(picker.buf, color_ns, line - 1, 0, {
         end_col = #lines[line],
@@ -570,7 +590,7 @@ function M.note_form(opts, callback)
         lines = { "  no tags · a add" }
       else
         for line, tag in ipairs(tags) do
-          lines[line] = string.format("  %s %s", selected[tag] and tag_icon or " ", tag)
+          lines[line] = string.format("  %s %s", selected[tag] and tag_display_icon(tag) or " ", tag)
         end
       end
       set_lines(lines, " tags · enter toggle · a add ", { 1, 0 })

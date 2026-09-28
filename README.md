@@ -10,7 +10,7 @@ native Neovim windows and one small JSON index.
 ## ◆ Highlights
 
 - Markdown notes in a local vault.
-- Pinned notes, tags and project notebooks.
+- Pinned notes, coloured tags and project notebooks with configurable icons.
 - Optional file and directory targets.
 - Calendar view with day scheduling.
 - One persistent Markdown preview.
@@ -93,11 +93,12 @@ Open with `<A-o>` or `:SeijakuToggle`.
 | `Enter`             | Focus the persistent preview        |
 | `n`                 | New note                            |
 | `a`                 | Attach a target                     |
+| `O`                 | Replace the current target          |
 | `r`                 | Rename                              |
 | `dd`                | Delete                              |
 | `p`                 | Pin / unpin                         |
-| `T`                 | Edit tags                           |
-| `N`                 | Assign notebook                     |
+| `T`                 | Edit tags and tag icons             |
+| `N`                 | Assign or clear a notebook          |
 | `o`                 | Open target in Oil                  |
 | `s`                 | Cycle sort order                    |
 | `Tab` / `Shift-Tab` | Cycle notebooks and no-filter state |
@@ -108,6 +109,11 @@ Open with `<A-o>` or `:SeijakuToggle`.
 
 The first entry in both selector panels is `○`: no notebook or no tag filter.
 When active it becomes `●`, with accent colour and bold text.
+The notebook assignment popup marks the note's current notebook with its
+coloured background. In the tag assignment popup, `r` changes the highlighted
+tag's icon. In the tag selector panel, `r` edits a tag's name, icon and colour;
+`n` creates a new tag with the same attributes. From either selector panel,
+`dd` deletes the selected notebook or tag after confirmation; notes are kept.
 
 `preview_width` sets the preview's initial width in the normal layout. It accepts
 columns or a fraction of the editor width (`0.2` = 20%); the preview remains

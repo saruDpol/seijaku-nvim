@@ -15,6 +15,10 @@ local tag_highlight_colors = {}
 local default_notebook_icon = "■"
 local tag_icon = ""
 
+local function tag_display_icon(tag)
+	return index.get_tag_icon(tag) or tag_icon
+end
+
 local function refresh_sidebar()
 	local ok, sidebar = pcall(require, "seijaku.sidebar")
 
@@ -76,7 +80,7 @@ function M.select_tags(initial_tags, callback)
 		height = 1,
 		style = "minimal",
 		border = "rounded",
-		title = " tags · enter toggle · a add ",
+		title = " tags · enter toggle · a add · r icon ",
 		title_pos = "center",
 		zindex = 60,
 	})
@@ -129,7 +133,7 @@ function M.select_tags(initial_tags, callback)
 			lines = { "  no tags · press a to add" }
 		else
 			for line, tag in ipairs(selector.tags) do
-				lines[line] = string.format("  %s %s", selected[tag] and tag_icon or " ", tag)
+				lines[line] = string.format("  %s %s", selected[tag] and tag_display_icon(tag) or " ", tag)
 			end
 		end
 
@@ -156,7 +160,7 @@ function M.select_tags(initial_tags, callback)
 			height = height,
 			style = "minimal",
 			border = "rounded",
-			title = " tags · enter toggle · a add ",
+			title = " tags · enter toggle · a add · r icon ",
 			title_pos = "center",
 			zindex = 60,
 		})
@@ -225,6 +229,28 @@ function M.select_tags(initial_tags, callback)
 		vim.cmd("startinsert")
 	end
 
+	local function edit_icon()
+		local tag = selector.tags[vim.api.nvim_win_get_cursor(win)[1]]
+		if not tag then
+			return
+		end
+		picker.input({
+			title = " tag icon · optional ",
+			default = tag_display_icon(tag),
+			allow_empty = true,
+		}, function(icon)
+			if icon == nil then
+				return
+			end
+			local ok, err = index.set_tag_icon(tag, icon ~= "" and icon or false)
+			if not ok then
+				vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
+				return
+			end
+			show_list(tag)
+		end)
+	end
+
 	local opts = { buffer = buf, silent = true, nowait = true }
 	vim.keymap.set("n", "j", function()
 		local line = vim.api.nvim_win_get_cursor(win)[1]
@@ -237,6 +263,7 @@ function M.select_tags(initial_tags, callback)
 	vim.keymap.set("n", "<Down>", "j", opts)
 	vim.keymap.set("n", "<Up>", "k", opts)
 	vim.keymap.set("n", "a", add_new, opts)
+	vim.keymap.set("n", "r", edit_icon, opts)
 	vim.keymap.set("n", "<CR>", toggle_current, opts)
 	vim.keymap.set("n", "q", close, opts)
 	vim.keymap.set("n", "<Esc>", finish, opts)

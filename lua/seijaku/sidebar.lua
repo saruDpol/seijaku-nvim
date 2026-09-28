@@ -35,6 +35,10 @@ local function notebook_display_icon(notebook)
 	return type(icon) == "string" and icon ~= "" and icon or default_notebook_icon
 end
 
+local function tag_display_icon(tag)
+	return index.get_tag_icon(tag) or tag_icon
+end
+
 local palettes = {
 	muted = {
 		brand = "#769267",
@@ -740,14 +744,15 @@ append_note_card = function(lines, line_items, note)
 
 	local detail_line, tag_ranges = "", {}
 	for _, tag in ipairs(note.tags or {}) do
+		local icon = tag_display_icon(tag)
 		local separator = detail_line ~= "" and " " or ""
-		if detail_line ~= "" and display_width(detail_line .. separator .. tag_icon) > width then
+		if detail_line ~= "" and display_width(detail_line .. separator .. icon) > width then
 			append(detail_line, "tags", { tag_ranges = tag_ranges })
 			detail_line, tag_ranges, separator = "", {}, ""
 		end
 		detail_line = detail_line .. separator
 		local start_col = #detail_line
-		detail_line = detail_line .. tag_icon
+		detail_line = detail_line .. icon
 		table.insert(tag_ranges, { start_col = start_col, end_col = #detail_line, tag = tag })
 	end
 
@@ -1356,12 +1361,11 @@ local function render_selector_panels()
 		selector_width = math.max(selector_width, display_width(notebook_display_icon(book) .. " " .. book.name))
 	end
 	for _, tag in ipairs(index.list_tags()) do
-		selector_width = math.max(selector_width, display_width(tag_icon .. " " .. tag))
+		selector_width = math.max(selector_width, display_width(tag_display_icon(tag) .. " " .. tag))
 	end
-	-- Selector panes are part of the fixed sidebar group. Long notebook or tag
-	-- names must not make them grow into the preview column; the configured
-	-- sidebar width is their upper bound and overflowing text is clipped.
-	selector_width = math.min(selector_width, preferred_sidebar_width())
+	-- The note list has its own fixed width. The adjacent selector column is
+	-- sized from its content, so notebook and tag names remain legible and the
+	-- preview/external panes take the remaining space.
 	sidebar.selector_width = selector_width
 	if is_valid_buf(sidebar.notebook_buf) then
 		local lines, items = {}, {}
@@ -1441,8 +1445,9 @@ local function render_selector_panels()
 		table.insert(lines, no_filter_display_icon(sidebar.all_tag == "all"))
 		items[#lines] = { tag = "all", all = true }
 		for _, tag in ipairs(index.list_tags()) do
-			table.insert(lines, tag_icon .. " " .. tag)
-			items[#lines] = { tag = tag }
+			local icon = tag_display_icon(tag)
+			table.insert(lines, icon .. " " .. tag)
+			items[#lines] = { tag = tag, icon = icon }
 		end
 		sidebar.tag_items = items
 		with_modifiable(sidebar.tag_buf, function()
@@ -1495,7 +1500,7 @@ local function render_selector_panels()
 				})
 
 				vim.api.nvim_buf_set_extmark(sidebar.tag_buf, highlight_ns, line - 1, 0, {
-					end_col = #tag_icon,
+					end_col = #(item.icon or tag_icon),
 					hl_group = tag_group,
 					hl_mode = "combine",
 					priority = 130,
@@ -1921,7 +1926,7 @@ local function render_note_header(note_id)
 			)
 		end
 		for _, tag in ipairs(note.tags or {}) do
-			add(tag_icon .. " " .. tag, notes.tag_glyph_highlight(tag))
+			add(tag_display_icon(tag) .. " " .. tag, notes.tag_glyph_highlight(tag))
 		end
 	end
 
@@ -2275,6 +2280,20 @@ function M.handle_notebook()
 	end)
 end
 
+local function assign_inferred_notebook(note, target_path)
+	if note.notebook_id then
+		return
+	end
+	local notebook = index.notebook_for_target_path(target_path)
+	if not notebook then
+		return
+	end
+	local assigned, err = index.assign_notebook(note.id, notebook.id)
+	if not assigned then
+		vim.notify("seijaku: " .. tostring(err), vim.log.levels.WARN)
+	end
+end
+
 function M.handle_attach_target()
 	local item = active_note_item()
 	if not item or item.kind ~= "note" then
@@ -2299,15 +2318,36 @@ function M.handle_attach_target()
 			vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
 			return
 		end
-		if not note.notebook_id then
-			local notebook = index.notebook_for_target_path(target_path)
-			if notebook then
-				local assigned, assign_err = index.assign_notebook(note.id, notebook.id)
-				if not assigned then
-					vim.notify("seijaku: " .. tostring(assign_err), vim.log.levels.WARN)
-				end
-			end
+		assign_inferred_notebook(note, target_path)
+		M.refresh()
+	end)
+end
+
+function M.handle_replace_target()
+	local item = active_note_item()
+	if not item or item.kind ~= "note" then
+		return
+	end
+	local note = index.get_note(item.note_id)
+	if not note then
+		return
+	end
+	local initial = note.targets and note.targets[1] and note.targets[1].path or ""
+	picker.browse_path(initial, function(selected_path)
+		if selected_path == nil or selected_path == "" then
+			return
 		end
+		local target_path = paths.normalize(selected_path)
+		if not target_path then
+			vim.notify("seijaku: invalid target path", vim.log.levels.ERROR)
+			return
+		end
+		local ok, err = index.set_target(note.id, target_path, paths.target_type(target_path))
+		if not ok then
+			vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
+			return
+		end
+		assign_inferred_notebook(note, target_path)
 		M.refresh()
 	end)
 end
@@ -2377,26 +2417,39 @@ local function edit_tag(tag)
 			return
 		end
 		picker.input(
-			{ title = " tag color · #RRGGBB ", default = index.get_tag_color(tag) or "", allow_empty = false },
-			function(color)
-				if not color then
+			{ title = " tag icon · optional ", default = tag_display_icon(tag), allow_empty = true },
+			function(icon)
+				if icon == nil then
 					return
 				end
-				local ok, err = index.rename_tag(tag, name)
-				if not ok then
-					vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
-					return
-				end
-				ok, err = index.set_tag_color(name, color)
-				if not ok then
-					vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
-					return
-				end
-				local sidebar = sidebar_state()
-				if sidebar.all_tag == tag then
-					sidebar.all_tag = vim.trim(name):lower()
-				end
-				M.refresh()
+				picker.input(
+					{ title = " tag color · #RRGGBB ", default = index.get_tag_color(tag) or "", allow_empty = false },
+					function(color)
+						if not color then
+							return
+						end
+						local ok, err = index.rename_tag(tag, name)
+						if not ok then
+							vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
+							return
+						end
+						ok, err = index.set_tag_icon(name, icon ~= "" and icon or false)
+						if not ok then
+							vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
+							return
+						end
+						ok, err = index.set_tag_color(name, color)
+						if not ok then
+							vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
+							return
+						end
+						local sidebar = sidebar_state()
+						if sidebar.all_tag == tag then
+							sidebar.all_tag = vim.trim(name):lower()
+						end
+						M.refresh()
+					end
+				)
 			end
 		)
 	end)
@@ -2448,20 +2501,75 @@ local function create_tag_from_selector()
 			return
 		end
 		picker.input(
-			{ title = " tag color · #RRGGBB ", default = "#cc5555", allow_empty = false },
-			function(color)
-				if not color then
+			{ title = " tag icon · optional ", default = tag_icon, allow_empty = true },
+			function(icon)
+				if icon == nil then
 					return
 				end
-				local ok, err = index.set_tag_color(name, color)
-				if not ok then
-					vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
-					return
-				end
-				M.refresh()
+				picker.input(
+					{ title = " tag color · #RRGGBB ", default = "#cc5555", allow_empty = false },
+					function(color)
+						if not color then
+							return
+						end
+						local ok, err = index.set_tag_color(name, color)
+						if not ok then
+							vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
+							return
+						end
+						ok, err = index.set_tag_icon(name, icon ~= "" and icon or false)
+						if not ok then
+							vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
+							return
+						end
+						M.refresh()
+					end
+				)
 			end
 		)
 	end)
+end
+
+local function delete_notebook_from_selector()
+	local sidebar = sidebar_state()
+	local item = sidebar.notebook_items[vim.api.nvim_win_get_cursor(0)[1]]
+	local notebook = item and not item.all and index.get_notebook(item.id) or nil
+	if not notebook then
+		return
+	end
+	if vim.fn.confirm("Delete notebook '" .. notebook.name .. "'? Notes stay intact.", "&Delete\n&Cancel", 2) ~= 1 then
+		return
+	end
+	local ok, err = index.delete_notebook(notebook.id)
+	if not ok then
+		vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
+		return
+	end
+	if sidebar.all_notebook == notebook.id then
+		sidebar.all_notebook = "all"
+	end
+	M.refresh()
+end
+
+local function delete_tag_from_selector()
+	local sidebar = sidebar_state()
+	local item = sidebar.tag_items[vim.api.nvim_win_get_cursor(0)[1]]
+	local tag = item and not item.all and item.tag or nil
+	if not tag then
+		return
+	end
+	if vim.fn.confirm("Delete tag '" .. tag .. "'? Notes stay intact.", "&Delete\n&Cancel", 2) ~= 1 then
+		return
+	end
+	local ok, err = index.delete_tag(tag)
+	if not ok then
+		vim.notify("seijaku: " .. tostring(err), vim.log.levels.ERROR)
+		return
+	end
+	if sidebar.all_tag == tag then
+		sidebar.all_tag = "all"
+	end
+	M.refresh()
 end
 
 local function open_path_in_oil(target_path)
@@ -2519,6 +2627,8 @@ local function open_path_in_oil(target_path)
 		vim.notify("seijaku: failed to open target in Oil: " .. tostring(err), vim.log.levels.ERROR)
 		return false
 	end
+	-- Only restore the fixed sidebar shell. Oil and the Markdown preview remain
+	-- ordinary flexible panes, so Neovim can distribute the remaining space.
 	rebalance_normal_layout()
 	schedule_layout_rebalance()
 	return true
@@ -2904,6 +3014,7 @@ function M.setup_notebook_mappings(buf)
 			edit_notebook(index.get_notebook(item.id))
 		end
 	end, opts)
+	vim.keymap.set("n", "dd", delete_notebook_from_selector, opts)
 	vim.keymap.set("n", "n", create_notebook_from_selector, opts)
 	vim.keymap.set("n", "o", M.handle_open_notebook_target, opts)
 	vim.keymap.set("n", "<Space>", function()
@@ -2973,6 +3084,7 @@ function M.setup_tag_mappings(buf)
 			edit_tag(item.tag)
 		end
 	end, opts)
+	vim.keymap.set("n", "dd", delete_tag_from_selector, opts)
 	vim.keymap.set("n", "n", create_tag_from_selector, opts)
 	vim.keymap.set("n", "<Space>", function()
 		local sidebar = sidebar_state()
@@ -3009,7 +3121,7 @@ function M.setup_calendar_notes_mappings(buf)
 		silent = true,
 		nowait = true,
 	}
-	for _, lhs in ipairs({ "i", "I", "A", "O", "c", "S" }) do
+	for _, lhs in ipairs({ "i", "I", "A", "c", "S" }) do
 		vim.keymap.set({ "n", "x" }, lhs, "<Nop>", opts)
 	end
 	for _, lhs in ipairs({ "gi", "gI", "<Insert>" }) do
@@ -3035,6 +3147,7 @@ function M.setup_calendar_notes_mappings(buf)
 	vim.keymap.set("n", "N", M.handle_notebook, opts)
 	vim.keymap.set("n", "p", M.handle_pin, opts)
 	vim.keymap.set("n", "o", M.handle_open_target, opts)
+	vim.keymap.set("n", "O", M.handle_replace_target, opts)
 	vim.keymap.set("n", "dd", M.handle_calendar_delete, opts)
 	vim.keymap.set("n", "<Tab>", M.toggle_all_notebook, opts)
 	vim.keymap.set("n", "<S-Tab>", function()
@@ -3100,10 +3213,11 @@ function M.setup_mappings(buf)
 	vim.keymap.set("n", "T", M.handle_tags, opts)
 	vim.keymap.set("n", "p", M.handle_pin, opts)
 	vim.keymap.set("n", "o", M.handle_open_target, opts)
+	vim.keymap.set("n", "O", M.handle_replace_target, opts)
 	vim.keymap.set("n", "/", M.prompt_title_filter, opts)
 	vim.keymap.set("n", "g/", M.handle_live_grep, opts)
 	vim.keymap.set("n", "R", M.refresh, opts)
-	for _, lhs in ipairs({ "i", "I", "A", "O", "c", "S" }) do
+	for _, lhs in ipairs({ "i", "I", "A", "c", "S" }) do
 		vim.keymap.set({ "n", "x" }, lhs, "<Nop>", opts)
 	end
 	for _, lhs in ipairs({ "gi", "gI", "<Insert>" }) do

@@ -74,22 +74,6 @@ function M.rebalance_sidebar(sidebar, width, preview_width, opts)
         vim.wo[win].winfixwidth = false
       end
     end
-  elseif M.is_valid_win(sidebar.preview_win) then
-    -- preview_width is an initial size only. On later passes preserve the
-    -- width chosen interactively by the user.
-    if sidebar.preview_width_initialized then
-      preview_target = vim.api.nvim_win_get_width(sidebar.preview_win)
-    end
-
-    -- In normal layout the external editor is the flexible area. Resize it
-    -- first so neither the list nor the selector column can absorb columns
-    -- released by a narrow preview.
-    local external = M.external_windows(sidebar)
-    if #external > 0 then
-      local external_target = math.max(1, vim.o.columns - preview_target - sidebar_target - 2)
-      vim.wo[external[1]].winfixwidth = false
-      pcall(vim.api.nvim_win_set_width, external[1], external_target)
-    end
   end
 
   for _, win in ipairs(sidebar_windows) do
@@ -116,10 +100,9 @@ function M.rebalance_sidebar(sidebar, width, preview_width, opts)
 
   if opts.full then
     sidebar.preview_width_initialized = true
-  elseif M.is_valid_win(sidebar.preview_win) then
-    -- Reapply the initial/current preview width after fixing the sidebar tree,
-    -- holding the pair only for this operation. It is released immediately
-    -- afterwards so the user can resize it normally.
+  elseif M.is_valid_win(sidebar.preview_win) and not sidebar.preview_width_initialized then
+    -- Apply the configured width once. Afterwards the preview is an ordinary,
+    -- resizable editor pane and never participates in sidebar rebalancing.
     for _, win in ipairs(preview_windows) do
       if M.is_valid_win(win) then
         vim.wo[win].winfixwidth = true

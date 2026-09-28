@@ -10,11 +10,12 @@ local vault_watcher = nil
 local pending_upserts = {}
 local pending_deletes = {}
 local pending_tag_colors = {}
+local pending_tag_icons = {}
 local pending_notebook_upserts = {}
 local pending_notebook_deletes = {}
 local last_index_raw = nil
 local note_query_cache = {}
-local schema_version = 5
+local schema_version = 6
 
 local notebook_palette = {
   "#795548", "#66558a", "#3e6d78", "#5f7848", "#926449", "#875770",
@@ -87,6 +88,7 @@ local function empty_index()
     notes = {},
     notebooks = {},
     tag_colors = {},
+    tag_icons = {},
     targets = {},
     target_dirs = {},
   }
@@ -140,6 +142,10 @@ local function read_index_file(state)
     end
   end
   decoded.tag_colors = type(decoded.tag_colors) == "table" and decoded.tag_colors or {}
+  decoded.tag_icons = type(decoded.tag_icons) == "table" and decoded.tag_icons or {}
+  for tag, icon in pairs(decoded.tag_icons) do
+    decoded.tag_icons[tag] = notebook_icon(icon)
+  end
   decoded.version = version
   return decoded, raw
 end
@@ -195,7 +201,11 @@ local function apply_pending(index)
   end
   index.tag_colors = index.tag_colors or {}
   for tag, color in pairs(pending_tag_colors) do
-    index.tag_colors[tag] = color
+    index.tag_colors[tag] = color or nil
+  end
+  index.tag_icons = index.tag_icons or {}
+  for tag, icon in pairs(pending_tag_icons) do
+    index.tag_icons[tag] = icon or nil
   end
   return index, detached_note_ids
 end
@@ -204,6 +214,7 @@ local function clear_pending()
   pending_upserts = {}
   pending_deletes = {}
   pending_tag_colors = {}
+  pending_tag_icons = {}
   pending_notebook_upserts = {}
   pending_notebook_deletes = {}
 end
@@ -212,6 +223,7 @@ local function has_pending()
   return next(pending_upserts) ~= nil
     or next(pending_deletes) ~= nil
     or next(pending_tag_colors) ~= nil
+    or next(pending_tag_icons) ~= nil
     or next(pending_notebook_upserts) ~= nil
     or next(pending_notebook_deletes) ~= nil
 end
@@ -328,7 +340,7 @@ function M.load()
     end
     return true
   end
-  if next(pending_tag_colors) ~= nil then
+  if next(pending_tag_colors) ~= nil or next(pending_tag_icons) ~= nil then
     state_mod.mark_dirty()
     M.schedule_save()
   end
@@ -343,6 +355,7 @@ function M.rebuild_derived_indexes()
   index.notes = index.notes or {}
   index.notebooks = index.notebooks or {}
   index.tag_colors = index.tag_colors or {}
+  index.tag_icons = index.tag_icons or {}
   index.targets = {}
   index.target_dirs = {}
   index.version = schema_version
@@ -569,7 +582,7 @@ function M.reload_if_changed()
   if ok_notes and type(notes.define_tag_highlights) == "function" then
     notes.define_tag_highlights()
   end
-  if next(pending_tag_colors) ~= nil then
+  if next(pending_tag_colors) ~= nil or next(pending_tag_icons) ~= nil then
     state_mod.mark_dirty()
     M.schedule_save()
   end
@@ -1113,6 +1126,12 @@ function M.list_tags()
       table.insert(result, tag)
     end
   end
+  for tag, _ in pairs((state_mod.get().index or {}).tag_icons or {}) do
+    if tag ~= "" and not seen[tag] then
+      seen[tag] = true
+      table.insert(result, tag)
+    end
+  end
   table.sort(result)
   return result
 end
@@ -1138,6 +1157,30 @@ function M.set_tag_color(tag, color)
   current_index.tag_colors = current_index.tag_colors or {}
   current_index.tag_colors[tag] = color
   pending_tag_colors[tag] = color
+  return structural_save()
+end
+
+function M.get_tag_icon(tag)
+  local icons = state_mod.get().index and state_mod.get().index.tag_icons or {}
+  return notebook_icon(icons and icons[tag])
+end
+
+function M.set_tag_icon(tag, icon)
+  tag = vim.trim(tostring(tag or "")):lower()
+  if tag == "" then
+    return false, "tag is required"
+  end
+  if tag:find("[`,%c]") then
+    return false, "tags cannot contain commas, backticks or control characters"
+  end
+  local normalized = notebook_icon(icon)
+  if icon ~= nil and icon ~= false and icon ~= "" and not normalized then
+    return false, "tag icon must contain one to four printable characters"
+  end
+  local current_index = state_mod.get().index
+  current_index.tag_icons = current_index.tag_icons or {}
+  current_index.tag_icons[tag] = normalized
+  pending_tag_icons[tag] = normalized or false
   return structural_save()
 end
 
@@ -1179,6 +1222,66 @@ function M.rename_tag(old_tag, new_tag)
     pending_tag_colors[new_tag] = colors[new_tag]
   end
   colors[old_tag] = nil
+  pending_tag_colors[old_tag] = false
+  local icons = state.index.tag_icons or {}
+  if icons[old_tag] and not icons[new_tag] then
+    icons[new_tag] = icons[old_tag]
+    pending_tag_icons[new_tag] = icons[new_tag]
+  end
+  icons[old_tag] = nil
+  pending_tag_icons[old_tag] = false
+  return structural_save()
+end
+
+function M.delete_tag(tag)
+  tag = vim.trim(tostring(tag or "")):lower()
+  if tag == "" then
+    return false, "tag is required"
+  end
+
+  local state = state_mod.get()
+  local exists = (state.index.tag_colors or {})[tag] ~= nil
+    or (state.index.tag_icons or {})[tag] ~= nil
+  for _, note in pairs(state.notes_by_id or {}) do
+    for _, value in ipairs(note.tags or {}) do
+      if value == tag then
+        exists = true
+        break
+      end
+    end
+    if exists then
+      break
+    end
+  end
+  if not exists then
+    return false, "tag not found"
+  end
+
+  -- Removing a tag only removes its association and presentation metadata;
+  -- the notes themselves remain untouched.
+  for _, note in pairs(state.notes_by_id or {}) do
+    local filtered, changed = {}, false
+    for _, value in ipairs(note.tags or {}) do
+      if value == tag then
+        changed = true
+      else
+        table.insert(filtered, value)
+      end
+    end
+    if changed then
+      note.tags = filtered
+      note.updated_at = util.now()
+      queue_upsert(note)
+    end
+  end
+
+  state.index.tag_colors = state.index.tag_colors or {}
+  state.index.tag_icons = state.index.tag_icons or {}
+  state.index.tag_colors[tag] = nil
+  state.index.tag_icons[tag] = nil
+  pending_tag_colors[tag] = false
+  pending_tag_icons[tag] = false
+  M.rebuild_derived_indexes()
   return structural_save()
 end
 
@@ -1220,6 +1323,27 @@ function M.toggle_pin(note_id)
   note.updated_at = util.now()
   M.mark_dirty_sync(note)
   return true, note.pinned
+end
+
+function M.set_target(note_id, target_path, target_type)
+  local note = M.get_note(note_id)
+  if not note then
+    return false, "note not found"
+  end
+  target_path = paths.normalize(target_path)
+  if not target_path then
+    return false, "invalid target path"
+  end
+  note.targets = {
+    {
+      path = target_path,
+      type = target_type or paths.target_type(target_path),
+    },
+  }
+  note.updated_at = util.now()
+  M.rebuild_derived_indexes()
+  queue_upsert(note)
+  return structural_save()
 end
 
 function M.attach(note_id, target_path, target_type, opts)

@@ -584,7 +584,7 @@ function M.manage_notebooks()
 				end
 				picker.browse_path("", function(path)
 					if path == nil then
-						path = ""
+						return
 					end
 					picker.input({ title = " notebook icon · optional ", default = default_notebook_icon, allow_empty = true }, function(icon)
 						if icon == nil then

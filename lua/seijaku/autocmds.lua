@@ -30,30 +30,27 @@ function M.setup()
     end,
   })
 
-  vim.api.nvim_create_autocmd({ "BufEnter", "DirChanged" }, {
+  vim.api.nvim_create_autocmd("BufEnter", {
     group = group,
     callback = function(args)
       local state = require("seijaku.state").get()
 
-      if args.event == "BufEnter" then
-        local sidebar = state.sidebar
-        local managed = args.buf == sidebar.buf
-          or args.buf == sidebar.calendar_notes_buf
-          or args.buf == sidebar.preview_buf
-          or sidebar.note_bufs[args.buf] == true
+      local sidebar = state.sidebar
+      local managed = args.buf == sidebar.buf
+        or args.buf == sidebar.calendar_notes_buf
+        or args.buf == sidebar.preview_buf
+        or sidebar.note_bufs[args.buf] == true
 
-        if managed then
-          return
-        end
-
-        if vim.bo[args.buf].filetype == "netrw" then
-          require("seijaku.context").get_current()
-        end
+      if managed then
+        return
       end
 
-      if state.sidebar.open then
-        require("seijaku.sidebar").schedule_refresh()
+      if vim.bo[args.buf].filetype == "netrw" then
+        require("seijaku.context").get_current()
       end
+
+      -- Entering an unrelated buffer changes context, not note data. Avoid a
+      -- full sidebar render here; index changes refresh the sidebar themselves.
     end,
   })
 
@@ -103,11 +100,9 @@ function M.setup()
       local state = require("seijaku.state").get()
       local oil_buf = args.data and args.data.buf or nil
       local source_win = state.sidebar.source_win
-      local captured = false
 
       if oil_buf and vim.api.nvim_get_current_buf() == oil_buf then
         require("seijaku.context").get_current()
-        captured = true
       elseif oil_buf
           and source_win
           and vim.api.nvim_win_is_valid(source_win)
@@ -115,12 +110,9 @@ function M.setup()
         vim.api.nvim_win_call(source_win, function()
           require("seijaku.context").get_current()
         end)
-        captured = true
       end
 
-      if captured and state.sidebar.open then
-        require("seijaku.sidebar").refresh()
-      end
+      -- Capturing Oil context is enough. The sidebar content did not change.
     end,
   })
 
@@ -150,6 +142,20 @@ function M.setup()
         if state.sidebar.open then
           require("seijaku.sidebar").reconcile_note_windows()
         end
+      end)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd({ "BufWinLeave", "BufDelete", "BufWipeout" }, {
+    group = group,
+    callback = function(args)
+      local sidebar_state = require("seijaku.state").get().sidebar
+      if not sidebar_state.open
+          or (args.buf ~= sidebar_state.preview_buf and args.buf ~= sidebar_state.note_header_buf) then
+        return
+      end
+      vim.schedule(function()
+        require("seijaku.sidebar").reconcile_note_windows()
       end)
     end,
   })

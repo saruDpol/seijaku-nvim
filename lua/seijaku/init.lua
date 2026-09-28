@@ -17,6 +17,14 @@ function M.setup(opts)
   config.setup(opts or {})
   state.setup(config.get())
 
+  local target_status = require("seijaku.target_status")
+  target_status.clear()
+  target_status.setup({
+    on_change = function()
+      require("seijaku.sidebar").schedule_refresh()
+    end,
+  })
+
   index.ensure_vault()
   local ok, err = index.load()
   if not ok then

@@ -64,12 +64,10 @@ function M.rebalance_sidebar(sidebar, width, preview_width, opts)
   local selector_width = math.max(1, tonumber(sidebar.selector_width) or 3)
   local preview_target = math.max(5, tonumber(preview_width) or 5)
   local sidebar_target = width + selector_width + 1
-  local preview_windows = { sidebar.preview_win, sidebar.note_header_win }
-
   if opts.full then
     -- Full layout has no host window: the sidebar keeps its compact geometry
     -- and the preview pair is the only flexible region.
-    for _, win in ipairs(preview_windows) do
+    for _, win in ipairs({ sidebar.preview_win, sidebar.note_header_win }) do
       if M.is_valid_win(win) then
         vim.wo[win].winfixwidth = false
       end
@@ -101,18 +99,17 @@ function M.rebalance_sidebar(sidebar, width, preview_width, opts)
   if opts.full then
     sidebar.preview_width_initialized = true
   elseif M.is_valid_win(sidebar.preview_win) and not sidebar.preview_width_initialized then
-    -- Apply the configured width once. Afterwards the preview is an ordinary,
-    -- resizable editor pane and never participates in sidebar rebalancing.
-    for _, win in ipairs(preview_windows) do
-      if M.is_valid_win(win) then
-        vim.wo[win].winfixwidth = true
-        pcall(vim.api.nvim_win_set_width, win, preview_target)
-      end
-    end
-    for _, win in ipairs(preview_windows) do
-      if M.is_valid_win(win) then
-        vim.wo[win].winfixwidth = false
-      end
+    -- Keep the whole Seijaku shell fixed and resize the external pane next to
+    -- the preview instead. Resizing the preview itself makes Neovim steal
+    -- columns from the sidebar tree, which is why the configured opening
+    -- width used to be lost on the next layout pass.
+    local anchor = sidebar.preview_anchor_win
+    if M.is_valid_win(anchor) then
+      local current_preview_width = vim.api.nvim_win_get_width(sidebar.preview_win)
+      local current_anchor_width = vim.api.nvim_win_get_width(anchor)
+      local target_anchor_width = math.max(1, current_anchor_width + current_preview_width - preview_target)
+      vim.wo[anchor].winfixwidth = false
+      pcall(vim.api.nvim_win_set_width, anchor, target_anchor_width)
     end
     sidebar.preview_width_initialized = true
   end

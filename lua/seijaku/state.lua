@@ -46,6 +46,7 @@ local state = {
     tag_items = {},
     selector_width = 3,
     selector_saved_winwidth = nil,
+    initializing = false,
     -- A preview is optional.  Once the user closes it, list navigation must
     -- not silently recreate it; opening a note explicitly does.
     preview_dismissed = false,
@@ -54,6 +55,8 @@ local state = {
     preview_win = nil,
     preview_buf = nil,
     preview_note_id = nil,
+    preview_anchor_win = nil,
+    preview_width_initialized = false,
     note_header_win = nil,
     note_header_buf = nil,
     calendar_date = nil,
@@ -90,6 +93,7 @@ function M.setup(config)
   state.sidebar.tag_items = {}
   state.sidebar.selector_width = 3
   state.sidebar.selector_saved_winwidth = nil
+  state.sidebar.initializing = false
   state.sidebar.preview_dismissed = false
   state.sidebar.header_win = nil
   state.sidebar.header_buf = nil
@@ -102,6 +106,8 @@ function M.setup(config)
   state.sidebar.preview_win = nil
   state.sidebar.preview_buf = nil
   state.sidebar.preview_note_id = nil
+  state.sidebar.preview_anchor_win = nil
+  state.sidebar.preview_width_initialized = false
   state.sidebar.note_header_win = nil
   state.sidebar.note_header_buf = nil
   state.sidebar.calendar_date = os.date("%Y-%m-%d")

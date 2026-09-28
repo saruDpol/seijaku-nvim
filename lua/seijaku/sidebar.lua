@@ -802,6 +802,7 @@ local function clear_preview_state(sidebar, dismissed)
 	sidebar.preview_win = nil
 	sidebar.preview_buf = nil
 	sidebar.preview_note_id = nil
+	sidebar.preview_anchor_win = nil
 	sidebar.note_header_win = nil
 	sidebar.note_header_buf = nil
 	sidebar.preview_width_initialized = false
@@ -845,11 +846,30 @@ local function rebalance_normal_layout()
 	)
 end
 
+local function redraw_dashboard(win)
+	if not is_valid_win(win) then
+		return
+	end
+	local buf = vim.api.nvim_win_get_buf(win)
+	if not is_valid_buf(buf) or vim.bo[buf].filetype ~= "alpha" then
+		return
+	end
+	vim.api.nvim_win_call(win, function()
+		local ok, alpha = pcall(require, "alpha")
+		if ok and type(alpha.redraw) == "function" then
+			pcall(alpha.redraw)
+		end
+	end)
+end
+
 local function rebalance_full_layout()
 	layout.rebalance_sidebar(sidebar_state(), preferred_sidebar_width(), nil, { full = true })
 end
 
 local function schedule_layout_rebalance()
+	if sidebar_state().initializing then
+		return
+	end
 	if layout_rebalance_timer then
 		layout_rebalance_timer:stop()
 		layout_rebalance_timer:close()
@@ -865,7 +885,7 @@ local function schedule_layout_rebalance()
 			timer:close()
 		end
 		local sidebar = sidebar_state()
-		if sidebar.open and not sidebar.closing and not sidebar.full_layout_active then
+		if sidebar.open and not sidebar.closing and not sidebar.full_layout_active and not sidebar.initializing then
 			rebalance_normal_layout()
 		end
 	end))
@@ -1366,6 +1386,7 @@ local function render_selector_panels()
 	-- The note list has its own fixed width. The adjacent selector column is
 	-- sized from its content, so notebook and tag names remain legible and the
 	-- preview/external panes take the remaining space.
+	local width_changed = sidebar.selector_width ~= selector_width
 	sidebar.selector_width = selector_width
 	if is_valid_buf(sidebar.notebook_buf) then
 		local lines, items = {}, {}
@@ -1508,6 +1529,7 @@ local function render_selector_panels()
 			end
 		end
 	end
+	return width_changed
 end
 
 function M.refresh()
@@ -1539,7 +1561,7 @@ function M.refresh()
 	end)
 
 	apply_highlights()
-	render_selector_panels()
+	local selector_width_changed = render_selector_panels()
 	render_header_panel()
 
 	if selected_note_id and sidebar.mode == "all" and is_valid_win(sidebar.win) then
@@ -1608,9 +1630,9 @@ function M.refresh()
 	if is_valid_win(sidebar.preview_win) then
 		M.open_preview(sidebar.preview_note_id)
 	end
-	-- Let Neovim finish split creation and redraw before enforcing compact pane
-	-- widths; synchronous resizing here gets undone during the same refresh.
-	schedule_layout_rebalance()
+	if selector_width_changed and not sidebar.initializing then
+		rebalance_normal_layout()
+	end
 end
 
 function M.schedule_refresh()
@@ -1659,6 +1681,7 @@ function M.open()
 	local current_win = vim.api.nvim_get_current_win()
 	sidebar.source_win = current_win
 	sidebar.preview_dismissed = false
+	sidebar.initializing = true
 	context.get_current()
 	vim.wo[current_win].winfixwidth = false
 
@@ -1687,8 +1710,8 @@ function M.open()
 	vim.wo[sidebar.win].winfixwidth = false
 
 	M.setup_mappings(sidebar.buf)
-	M.open_preview(nil)
 	ensure_sidebar_panels()
+	M.open_preview(nil)
 	M.refresh()
 
 	for line, item in ipairs(sidebar.line_items) do
@@ -1700,6 +1723,8 @@ function M.open()
 		end
 	end
 	rebalance_normal_layout()
+	sidebar.initializing = false
+	redraw_dashboard(sidebar.preview_anchor_win)
 
 	if sidebar.mode == "calendar" and is_valid_win(sidebar.calendar_notes_win) then
 		vim.api.nvim_set_current_win(sidebar.calendar_notes_win)
@@ -1869,6 +1894,7 @@ function M.close()
 
 	sidebar.open = false
 	sidebar.full_layout_active = false
+	sidebar.initializing = false
 	sidebar.win = nil
 	sidebar.source_win = nil
 	sidebar.preview_dismissed = false
@@ -1993,14 +2019,17 @@ function M.open_preview(note_id, opts)
 	end
 
 	local return_win = vim.api.nvim_get_current_win()
+	local created_preview = false
 	if not is_valid_win(sidebar.preview_win) then
 		local position = state_mod.get().config.sidebar.position or "right"
 		local external_side = position == "left" and "right" or "left"
 		local anchor = adjacent_external_window(sidebar, sidebar.win, external_side)
 		if is_valid_win(anchor) then
+			sidebar.preview_anchor_win = anchor
 			vim.api.nvim_set_current_win(anchor)
 			vim.cmd(position == "left" and "leftabove vsplit" or "rightbelow vsplit")
 		else
+			sidebar.preview_anchor_win = nil
 			-- With only the sidebar left, split it and lift the preview out of the
 			-- sidebar's internal header/list tree into a full-height column.
 			vim.api.nvim_set_current_win(sidebar.win)
@@ -2008,16 +2037,18 @@ function M.open_preview(note_id, opts)
 			vim.cmd(position == "left" and "wincmd L" or "wincmd H")
 		end
 		sidebar.preview_win = vim.api.nvim_get_current_win()
+		created_preview = true
 		sidebar.preview_width_initialized = false
 		vim.wo[sidebar.preview_win].winfixwidth = false
 		set_preview_placeholder(sidebar, "Select a note")
 		sidebar.preview_dismissed = false
-		-- Split creation may donate columns back to the sidebar group. Restore
-		-- its compact invariant immediately and once more after Neovim settles.
-		rebalance_normal_layout()
-		schedule_layout_rebalance()
 	end
 	ensure_note_header_window(sidebar)
+	if created_preview and not sidebar.initializing then
+		-- The full preview pair now exists, so one layout pass is enough.
+		rebalance_normal_layout()
+		redraw_dashboard(sidebar.preview_anchor_win)
+	end
 
 	local note = note_id and index.get_note(note_id) or nil
 	if note then
@@ -2630,7 +2661,6 @@ local function open_path_in_oil(target_path)
 	-- Only restore the fixed sidebar shell. Oil and the Markdown preview remain
 	-- ordinary flexible panes, so Neovim can distribute the remaining space.
 	rebalance_normal_layout()
-	schedule_layout_rebalance()
 	return true
 end
 

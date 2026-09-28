@@ -33,7 +33,7 @@ return {
       vault_dir = "~/Notes/seijaku",
       sidebar = {
         width = "auto",
-        preview_width = "auto", -- "auto", columns, or a fraction such as 0.2
+        preview_width = 24, -- opening width: columns, or a fraction such as 0.2
         default_mode = "all",
         default_all_sort = "updated",
       },
@@ -115,10 +115,9 @@ tag's icon. In the tag selector panel, `r` edits a tag's name, icon and colour;
 `n` creates a new tag with the same attributes. From either selector panel,
 `dd` deletes the selected notebook or tag after confirmation; notes are kept.
 
-`preview_width` sets the preview's initial width in the normal layout. It accepts
-columns or a fraction of the editor width (`0.2` = 20%); the preview remains
-resizable afterwards. Full layout ignores it and gives the preview all space
-outside the fixed sidebar.
+`preview_width` sets the preview's opening width in the normal layout. It accepts
+columns or a fraction of the editor width (`0.2` = 20%). The preview remains
+resizable afterwards; the note list and selector column stay fixed.
 
 The sidebar renders compact cards with title, creation date, notebook, tags and
 targets. The preview and its header are one component: closing either closes

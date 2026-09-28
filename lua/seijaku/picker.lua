@@ -4,6 +4,8 @@ local active = nil
 local color_ns = vim.api.nvim_create_namespace("seijaku_picker_colors")
 local default_notebook_icon = "■"
 local tag_icon = ""
+local path_selected_icon = ""
+local path_empty_icon = "󰅖"
 
 local function display_width(value)
   return vim.fn.strdisplaywidth(value or "")
@@ -210,9 +212,9 @@ function M.input(opts, callback)
   return picker.win, picker.buf
 end
 
--- A temporary filesystem navigator used by the note form's path field.  It
--- deliberately does not replace the active picker, so closing it returns to
--- the exact composer state the user left behind.
+-- Shared filesystem navigator for note targets and notebook working paths.
+-- Space changes the pending selection; Enter accepts it (including no path),
+-- while Escape cancels without changing the caller's value.
 function M.browse_path(initial, callback)
   local origin = vim.api.nvim_get_current_win()
   local function normalize_directory(path)
@@ -220,7 +222,8 @@ function M.browse_path(initial, callback)
     return normalized == "/" and normalized or normalized:gsub("/$", "")
   end
 
-  local directory = normalize_directory(initial ~= "" and initial or vim.loop.cwd())
+  local selected_path = initial ~= "" and normalize_directory(initial) or nil
+  local directory = normalize_directory(selected_path or vim.loop.cwd())
   if vim.fn.isdirectory(directory) == 0 then
     directory = normalize_directory(vim.fn.fnamemodify(directory, ":h"))
   end
@@ -243,7 +246,7 @@ function M.browse_path(initial, callback)
     callback(value)
   end
 
-  local function render()
+  local function render(preferred_line)
     local names = vim.fn.readdir(directory)
     table.sort(names, function(a, b)
       local a_dir = vim.fn.isdirectory(directory .. "/" .. a) == 1
@@ -254,6 +257,7 @@ function M.browse_path(initial, callback)
       return a < b
     end)
     entries = {
+      { status = true },
       { label = ".", path = directory, directory = true },
       { label = "..", path = vim.fn.fnamemodify(directory, ":h"), directory = true },
     }
@@ -263,23 +267,60 @@ function M.browse_path(initial, callback)
     end
     local lines = {}
     for line, entry in ipairs(entries) do
-      lines[line] = "  " .. entry.label
+      if entry.status then
+        lines[line] = selected_path
+            and ("  " .. path_selected_icon .. " " .. selected_path)
+          or ("  " .. path_empty_icon .. " no path selected")
+      else
+        local icon = selected_path == entry.path and path_selected_icon or " "
+        lines[line] = "  " .. icon .. " " .. entry.label
+      end
     end
     vim.bo[buf].modifiable = true
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     vim.bo[buf].modifiable = false
+    vim.api.nvim_buf_clear_namespace(buf, color_ns, 0, -1)
+    vim.api.nvim_buf_set_extmark(buf, color_ns, 0, 0, {
+      end_col = #lines[1],
+      hl_group = selected_path and "SeijakuPickerSelected" or "SeijakuMuted",
+      priority = 100,
+    })
+    for line, entry in ipairs(entries) do
+      if not entry.status and selected_path == entry.path then
+        vim.api.nvim_buf_set_extmark(buf, color_ns, line - 1, 0, {
+          end_col = #lines[line],
+          hl_group = "SeijakuPickerSelected",
+          priority = 100,
+        })
+      end
+    end
     vim.api.nvim_win_set_config(win, popup_config(
       width,
       math.min(#lines, math.max(3, vim.o.lines - 6)),
-      " path · h parent · l open dir · enter select · esc cancel "
+      " path · space select/clear · enter continue · h/l navigate · esc cancel "
     ))
-    vim.api.nvim_win_set_cursor(win, { 1, 0 })
+    local cursor_line = preferred_line or 2
+    for line, entry in ipairs(entries) do
+      if not entry.status and selected_path == entry.path then
+        cursor_line = line
+        break
+      end
+    end
+    vim.api.nvim_win_set_cursor(win, { cursor_line, 0 })
   end
 
-  local function select_current()
-    local entry = entries[vim.api.nvim_win_get_cursor(win)[1]]
+  local function toggle_current()
+    local line = vim.api.nvim_win_get_cursor(win)[1]
+    local entry = entries[line]
     if not entry then return end
-    finish(entry.path)
+    if entry.status then
+      selected_path = nil
+    elseif selected_path == entry.path then
+      selected_path = nil
+    else
+      selected_path = entry.path
+    end
+    render(line)
   end
 
   local function enter_directory()
@@ -289,7 +330,8 @@ function M.browse_path(initial, callback)
     render()
   end
   local map_opts = { buffer = buf, silent = true, nowait = true }
-  vim.keymap.set("n", "<CR>", select_current, map_opts)
+  vim.keymap.set("n", "<Space>", toggle_current, map_opts)
+  vim.keymap.set("n", "<CR>", function() finish(selected_path or "") end, map_opts)
   vim.keymap.set("n", "l", enter_directory, map_opts)
   vim.keymap.set("n", "h", function()
     directory = normalize_directory(vim.fn.fnamemodify(directory, ":h"))
@@ -651,7 +693,8 @@ function M.note_form(opts, callback)
 			show_input(" notebook name ", "", false, function(name)
 				M.browse_path("", function(path)
 					if path == nil then
-						path = ""
+						render_form()
+						return
 					end
 					show_input(" notebook icon · optional ", default_notebook_icon, true, function(icon)
 						show_input(" notebook color · #RRGGBB · optional ", "", true, function(color)

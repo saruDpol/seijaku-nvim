@@ -128,6 +128,17 @@ local function read_index_file(state)
     return nil, raw, "invalid notebooks in " .. state.index_path .. "; the file was left unchanged"
   end
   decoded.notebooks = decoded.notebooks or {}
+  for id, notebook in pairs(decoded.notebooks) do
+    if type(notebook) ~= "table" then
+      return nil, raw, "invalid notebook " .. tostring(id) .. " in " .. state.index_path .. "; the file was left unchanged"
+    end
+    notebook.icon = notebook_icon(notebook.icon)
+    if notebook.path == vim.NIL or notebook.path == false or notebook.path == "" then
+      notebook.path = nil
+    elseif notebook.path ~= nil and type(notebook.path) ~= "string" then
+      return nil, raw, "invalid notebook path in " .. state.index_path .. "; the file was left unchanged"
+    end
+  end
   decoded.tag_colors = type(decoded.tag_colors) == "table" and decoded.tag_colors or {}
   decoded.version = version
   return decoded, raw
@@ -382,7 +393,7 @@ function M.rebuild_derived_indexes()
     end
     add_date_item(state.note_ids_by_date, M.calendar_date(note), note.id)
     if note.file then
-      local abs_note_path = paths.normalize(paths.join(state.vault_dir, note.file))
+      local abs_note_path = paths.absolute(paths.join(state.vault_dir, note.file))
 
       if abs_note_path then
         state.notes_by_file[abs_note_path] = note
@@ -390,13 +401,13 @@ function M.rebuild_derived_indexes()
     end
 
     for _, target in ipairs(note.targets or {}) do
-      local target_path = paths.normalize(target.path)
+      local target_path = paths.absolute(target.path)
 
       if target_path then
         index.targets[target_path] = index.targets[target_path] or {}
         table.insert(index.targets[target_path], note.id)
         target.path = target_path
-        target.type = target.type or paths.target_type(target_path)
+        target.type = target.type or "unknown"
       end
     end
   end
@@ -419,19 +430,22 @@ function M.rebuild_derived_indexes()
     end
   end
 
-  local all_target_paths = {}
-  for target_path, _ in pairs(index.targets) do
-    all_target_paths[target_path] = true
+  local target_types = {}
+  for _, note in pairs(index.notes) do
+    for _, target in ipairs(note.targets or {}) do
+      if target.path and not target_types[target.path] then
+        target_types[target.path] = target.type or "unknown"
+      end
+    end
   end
-  for target_path, _ in pairs(all_target_paths) do
-    local normalized = paths.normalize(target_path)
-    local target_type = paths.target_type(normalized)
+  for target_path, target_type in pairs(target_types) do
+    local normalized = paths.absolute(target_path)
 
     if target_type == "directory" then
       add_target_to_dir(normalized, normalized)
-      add_target_to_dir(paths.parent_dir(normalized), normalized)
+      add_target_to_dir(paths.parent_dir_absolute(normalized), normalized)
     else
-      add_target_to_dir(paths.parent_dir(normalized), normalized)
+      add_target_to_dir(paths.parent_dir_absolute(normalized), normalized)
     end
   end
 
@@ -653,7 +667,7 @@ function M.add_note(note, opts)
   M.rebuild_derived_indexes()
 
   if note.file then
-    local abs_note_path = paths.normalize(paths.join(state.vault_dir, note.file))
+    local abs_note_path = paths.absolute(paths.join(state.vault_dir, note.file))
 
     if abs_note_path then
       state.notes_by_file[abs_note_path] = note

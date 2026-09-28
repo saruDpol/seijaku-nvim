@@ -5,6 +5,7 @@ local defaults = {
 
   sidebar = {
     width = "auto",
+    preview_width = "auto",
     position = "right",
     default_mode = "all",
     default_all_sort = "updated",
@@ -75,6 +76,16 @@ end
 function M.setup(opts)
   options = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
   options.vault_dir = normalize_vault_dir(options.vault_dir)
+
+  -- Lua configs sometimes quote numeric values while editing. Accept those
+  -- values for preview_width so "0.2" behaves exactly like 0.2 (20%).
+  local preview_width = options.sidebar.preview_width
+  if type(preview_width) == "string" then
+    local numeric_preview_width = tonumber(preview_width)
+    if numeric_preview_width then
+      options.sidebar.preview_width = numeric_preview_width
+    end
+  end
 end
 
 function M.get()

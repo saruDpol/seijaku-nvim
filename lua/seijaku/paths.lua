@@ -5,16 +5,29 @@ function M.expand(path)
 end
 
 function M.normalize(path)
+  path = M.absolute(path)
+  if not path then
+    return nil
+  end
+
+  local real = vim.loop.fs_realpath(path)
+  return real or path
+end
+
+-- Return a stable absolute path without touching the filesystem. This is the
+-- right operation for paths already stored in the index: they may point to an
+-- unmounted drive or to a project which is temporarily unavailable.
+function M.absolute(path)
   if not path or path == "" then
     return nil
   end
 
-  path = vim.fn.expand(path)
-  path = vim.fn.fnamemodify(path, ":p")
-
-  local real = vim.loop.fs_realpath(path)
-  if real then
-    path = real
+  local is_absolute = path:sub(1, 1) == "/"
+    or path:match("^%a:[/\\]") ~= nil
+    or path:match("^[/\\][/\\]") ~= nil
+  if not is_absolute then
+    path = vim.fn.expand(path)
+    path = vim.fn.fnamemodify(path, ":p")
   end
 
   if path ~= "/" then
@@ -29,7 +42,7 @@ function M.normalize(path)
 end
 
 function M.basename(path)
-  return vim.fn.fnamemodify(path, ":t")
+  return vim.fs.basename(path)
 end
 
 function M.parent_dir(path)
@@ -38,6 +51,14 @@ function M.parent_dir(path)
   end
 
   return M.normalize(vim.fn.fnamemodify(path, ":h"))
+end
+
+function M.parent_dir_absolute(path)
+  if not path or path == "" then
+    return nil
+  end
+
+  return M.absolute(vim.fs.dirname(path))
 end
 
 function M.join(...)

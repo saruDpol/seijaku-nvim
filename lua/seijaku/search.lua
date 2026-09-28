@@ -4,60 +4,29 @@ local state_mod = require("seijaku.state")
 local index = require("seijaku.index")
 local paths = require("seijaku.paths")
 
-local valid_note_types = {
-  general = true,
-  diary = true,
-  meeting = true,
-  desc = true,
-}
-
-local function unique_notes(grouped)
-  local result = {}
-  local seen = {}
-
-  for _, notes in pairs(grouped or {}) do
-    for _, note in ipairs(notes) do
-      if note.id and not seen[note.id] then
-        seen[note.id] = true
-        table.insert(result, note)
-      end
-    end
-  end
-
-  return result
-end
-
 function M.notes_for_current_scope()
   local state = state_mod.get()
   local sidebar = state.sidebar
 
-  if sidebar.mode ~= "all" and sidebar.mode ~= "directory" then
-    return nil, "search is only available in all and directory modes"
+  if sidebar.mode ~= "all" then
+    return nil, "search is only available in all mode"
   end
-
-  if sidebar.mode == "all" then
-    local filter = valid_note_types[sidebar.all_filter] and sidebar.all_filter or "all"
-    local tag = sidebar.all_tag or "all"
-    local notes = index.query_notes({ sort = "updated", filter = filter, tag = tag })
-    local label = filter == "all" and "all notes" or (filter .. " notes")
-    if tag ~= "all" then
-      label = label .. " · #" .. tag
-    end
-    return notes, label
+  local tag = sidebar.all_tag or "all"
+  local notebook_id = sidebar.all_notebook ~= "all" and sidebar.all_notebook or nil
+  local book = notebook_id and index.get_notebook(notebook_id) or nil
+  local notes = index.query_notes({
+    sort = "updated",
+    tag = tag,
+    notebook_id = book and book.id or nil,
+  })
+  local label = "all notes"
+  if tag ~= "all" then
+    label = label .. " · " .. tag
   end
-
-  local ctx = require("seijaku.context").get_current()
-  local target = (sidebar.open and sidebar.current_target) or (ctx and ctx.target_path)
-  if not target then
-    return {}, "current directory"
+  if book then
+    label = label .. " · " .. book.name
   end
-
-  local target_type = ctx and ctx.target_path == target and ctx.target_type or paths.target_type(target)
-  if target_type == "directory" then
-    return unique_notes(index.get_notes_for_tree(target)), "directory notes"
-  end
-
-  return index.get_notes_for_target(target), "target notes"
+  return notes, label
 end
 
 local function open_match(entry)
@@ -76,7 +45,7 @@ local function open_match(entry)
   end
 
   local sidebar = require("seijaku.sidebar")
-  local opened = sidebar.open_preview(note.id, { force = true, focus = true })
+	local opened = sidebar.open_preview(note.id, { force = true, focus = true, reopen = true })
   if not opened then
     require("seijaku.notes").open(note.id)
   end

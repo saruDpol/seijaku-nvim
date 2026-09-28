@@ -6,11 +6,8 @@ local defaults = {
   sidebar = {
     width = "auto",
     position = "right",
-    standalone_layout = "vertical",
     default_mode = "all",
-    default_all_sort = "date",
-    default_all_filter = "all",
-    default_todo_filter = "open",
+    default_all_sort = "updated",
     all_mode_limit = 500,
     debounce_ms = 150,
   },
@@ -20,7 +17,6 @@ local defaults = {
     wrap = true,
     linebreak = true,
     breakindent = true,
-    fold_metadata = true,
   },
 
   appearance = {
@@ -30,15 +26,20 @@ local defaults = {
 
   notes = {
     templates = {
-      general = {},
-      diary = { "## Entry", "" },
+      blank = {},
+      journal = { "## {date}", "", "## Entry", "", "## Reflection", "" },
       meeting = {
         "## Attendees", "",
         "## Agenda", "",
         "## Notes", "",
-        "## Actions", "",
+        "## Decisions", "",
+        "## Actions", "", "- [ ] ",
       },
-      desc = { "## Description", "", "## Context", "" },
+      description = { "## Overview", "", "## Details", "", "## Context", "", "## References", "" },
+      tasks = { "## Tasks", "", "- [ ] ", "" },
+      idea = { "## Idea", "", "## Why now", "", "## Next step", "" },
+      research = { "## Question", "", "## Notes", "", "## Sources", "", "## Conclusion", "" },
+      project = { "## Goal", "", "## Scope", "", "## Plan", "", "## Open questions", "" },
     },
   },
 
@@ -62,12 +63,6 @@ local defaults = {
     telescope = true,
   },
 
-  backup = {
-    auto_on_exit = true,
-    manual_snapshots = true,
-    compress = true,
-    canonical_name = "seijaku-latest.tar.gz",
-  },
 }
 
 local options = vim.deepcopy(defaults)

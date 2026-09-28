@@ -8,18 +8,15 @@ local state = {
   root_dir = nil,
 
   dirty = false,
-  dirty_since_last_backup = false,
-
   index = nil,
 
   notes_by_id = {},
-  todos_by_id = {},
+  notebooks_by_id = {},
   notes_by_file = {},
   note_ids_by_target = {},
-  todo_ids_by_target = {},
   target_paths_by_dir = {},
   note_ids_by_date = {},
-  todo_ids_by_date = {},
+  note_ids_by_notebook = {},
   calendar_counts_by_month = {},
 
   context = {
@@ -27,32 +24,38 @@ local state = {
     association = nil,
   },
 
-  timers = {
-    save = nil,
-    sidebar = nil,
-  },
-
   sidebar = {
     open = false,
     win = nil,
     buf = nil,
+    header_win = nil,
+    header_buf = nil,
+    notebook_win = nil,
+    notebook_buf = nil,
+    tag_win = nil,
+    tag_buf = nil,
     mode = "all",
-    all_sort = "date",
-    all_filter = "all",
+    all_sort = "updated",
     all_tag = "all",
-    todo_filter = "open",
-    layout_mode = "docked",
-    standalone_host_win = nil,
-    current_dir = nil,
-    current_target = nil,
+    all_notebook = "all",
+    title_filter = "",
+    search_active = false,
     lines = {},
     line_items = {},
-    note_wins = {},
+    notebook_items = {},
+    tag_items = {},
+    selector_width = 3,
+    selector_saved_winwidth = nil,
+    -- A preview is optional.  Once the user closes it, list navigation must
+    -- not silently recreate it; opening a note explicitly does.
+    preview_dismissed = false,
     note_bufs = {},
     source_win = nil,
     preview_win = nil,
     preview_buf = nil,
     preview_note_id = nil,
+    note_header_win = nil,
+    note_header_buf = nil,
     calendar_date = nil,
     calendar_cursor = nil,
     calendar_notes_win = nil,
@@ -60,6 +63,7 @@ local state = {
     calendar_notes_lines = {},
     calendar_notes_items = {},
     calendar_day_input = "",
+    closing = false,
   },
 }
 
@@ -72,28 +76,34 @@ function M.setup(config)
   if state.sidebar.mode == "agenda" then
     state.sidebar.mode = "calendar"
   end
-  if state.sidebar.mode ~= "all"
-      and state.sidebar.mode ~= "directory"
-      and state.sidebar.mode ~= "todo"
-      and state.sidebar.mode ~= "calendar" then
-    state.sidebar.mode = "directory"
+  if state.sidebar.mode ~= "all" and state.sidebar.mode ~= "calendar" then
+    state.sidebar.mode = "all"
   end
-  state.sidebar.all_sort = config.sidebar.default_all_sort or "date"
-  state.sidebar.all_filter = config.sidebar.default_all_filter or "all"
+  state.sidebar.all_sort = config.sidebar.default_all_sort or "updated"
   state.sidebar.all_tag = "all"
-  state.sidebar.todo_filter = config.sidebar.default_todo_filter or "open"
-  state.sidebar.layout_mode = "docked"
-  state.sidebar.standalone_host_win = nil
-  state.sidebar.current_dir = nil
-  state.sidebar.current_target = nil
+  state.sidebar.all_notebook = "all"
+  state.sidebar.title_filter = ""
+  state.sidebar.search_active = false
   state.sidebar.lines = {}
   state.sidebar.line_items = {}
-  state.sidebar.note_wins = {}
+  state.sidebar.notebook_items = {}
+  state.sidebar.tag_items = {}
+  state.sidebar.selector_width = 3
+  state.sidebar.selector_saved_winwidth = nil
+  state.sidebar.preview_dismissed = false
+  state.sidebar.header_win = nil
+  state.sidebar.header_buf = nil
+  state.sidebar.notebook_win = nil
+  state.sidebar.notebook_buf = nil
+  state.sidebar.tag_win = nil
+  state.sidebar.tag_buf = nil
   state.sidebar.note_bufs = {}
   state.sidebar.source_win = nil
   state.sidebar.preview_win = nil
   state.sidebar.preview_buf = nil
   state.sidebar.preview_note_id = nil
+  state.sidebar.note_header_win = nil
+  state.sidebar.note_header_buf = nil
   state.sidebar.calendar_date = os.date("%Y-%m-%d")
   state.sidebar.calendar_cursor = nil
   state.sidebar.calendar_notes_win = nil
@@ -101,6 +111,7 @@ function M.setup(config)
   state.sidebar.calendar_notes_lines = {}
   state.sidebar.calendar_notes_items = {}
   state.sidebar.calendar_day_input = ""
+  state.sidebar.closing = false
   state.context.last = nil
   state.context.association = nil
 end
@@ -111,15 +122,10 @@ end
 
 function M.mark_dirty()
   state.dirty = true
-  state.dirty_since_last_backup = true
 end
 
 function M.clear_dirty()
   state.dirty = false
-end
-
-function M.clear_backup_dirty()
-  state.dirty_since_last_backup = false
 end
 
 return M

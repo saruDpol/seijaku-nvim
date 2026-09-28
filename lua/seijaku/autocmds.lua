@@ -17,7 +17,16 @@ function M.setup()
       local entered_win = vim.api.nvim_get_current_win()
       local from_win = previous_win
       previous_win = entered_win
-      sidebar.redirect_calendar_entry(from_win, entered_win)
+      sidebar.redirect_sidebar_entry(from_win, entered_win)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
+    group = group,
+    callback = function()
+      if require("seijaku.state").get().sidebar.open then
+        sidebar.schedule_layout_rebalance()
+      end
     end,
   })
 
@@ -122,7 +131,7 @@ function M.setup()
       local index = require("seijaku.index")
 
       if index.touch_note_for_file(file_path) then
-        require("seijaku.notes").sync_metadata(index.get_note_for_file(file_path), args.buf, {
+        require("seijaku.notes").clean_legacy_metadata(index.get_note_for_file(file_path), args.buf, {
           write = false,
         })
         local state = require("seijaku.state").get()
